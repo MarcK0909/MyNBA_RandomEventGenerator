@@ -29,5 +29,5 @@ TEAMS = [
     "New York Knicks", "Oklahoma City Thunder", "Orlando Magic",
     "Philadelphia 76ers", "Phoenix Suns", "Portland Trail Blazers",
     "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors",
-    "Utah Jazz", "Washington Wizards", "Austin Bullets", "Seattle Supersonics "
+    "Utah Jazz", "Washington Wizards", "Las Vegas Venom", "Seattle Supersonics"
 ]
