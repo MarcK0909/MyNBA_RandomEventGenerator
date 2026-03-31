@@ -1,4 +1,4 @@
-import streamlit as st
+import streamlit as st  # type: ignore
 import random
 import time
 from constants import DEFAULT_EVENT_WEIGHTS, PHASE_ICONS, TEAMS

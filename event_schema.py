@@ -1,3 +1,5 @@
+from typing import Any
+
 from constants import VALID_INTENSITIES
 
 
@@ -8,7 +10,7 @@ def _is_non_empty_str(value):
     return isinstance(value, str) and value.strip() != ""
 
 
-def validate_events_schema(events_data: dict):
+def validate_events_schema(events_data: Any):
     if not isinstance(events_data, dict):
         raise ValueError("events.json root must be an object mapping phase -> events list")
 

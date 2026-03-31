@@ -44,6 +44,8 @@ class EventEngineTests(unittest.TestCase):
     def test_generate_event_number_from_text(self, _):
         event = {"title": "T", "effect": "Draw a number between 1 and 45 for the player."}
         roll = generate_event_number(event)
+        if roll is None:
+            self.fail("Expected roll payload, got None")
         self.assertEqual(roll["value"], 17)
         self.assertEqual(roll["label"], "1-45")
 
@@ -57,6 +59,8 @@ class EventEngineTests(unittest.TestCase):
             "roll_max": 20,
         }
         roll = generate_event_number(event)
+        if roll is None:
+            self.fail("Expected roll payload, got None")
         self.assertEqual(roll["value"], 9)
         self.assertEqual(roll["label"], "5-20")
 
