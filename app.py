@@ -25,17 +25,47 @@ st.set_page_config(
 # -----------------------------
 EVENTS = load_events("events.json")
 
+
+def roll_event_for_phase(phase_name: str):
+    recent_titles = set()
+    event = weighted_random_event(
+        EVENTS[phase_name],
+        st.session_state.event_weights,
+        recent_titles
+    )
+
+    effect_text = event.get("effect", "")
+    team = None
+    if requires_team_draw(event):
+        locked_team = st.session_state.get("locked_team")
+        team = locked_team if locked_team else random.choice(TEAMS)
+
+    player_number = random.randint(1, 15) if requires_player_draw(event) else None
+    intensity = get_event_intensity(event)
+    event_roll = generate_event_number(event)
+
+    st.session_state.last_event = {
+        "phase": phase_name,
+        "title": event["title"],
+        "effect": effect_text,
+        "team": team,
+        "player": f"#{player_number} (Highest Overall)" if player_number else None,
+        "intensity": intensity,
+        "event_roll": event_roll
+    }
+    st.toast("🏀 New event generated!", icon="🎲")
+
 # -----------------------------
 # Session state
 # -----------------------------
-if "history" not in st.session_state:
-    st.session_state.history = []
-
 if "last_event" not in st.session_state:
     st.session_state.last_event = None
 
 if "event_weights" not in st.session_state:
     st.session_state.event_weights = DEFAULT_EVENT_WEIGHTS.copy()
+
+if "locked_team" not in st.session_state:
+    st.session_state.locked_team = None
 
 # -----------------------------
 # CSS
@@ -114,6 +144,18 @@ with st.sidebar:
     st.caption(f"Current total weight: {sum(st.session_state.event_weights.values())}")
 
     st.markdown("---")
+    st.markdown("### ⚙️ UX Controls")
+    use_locked_team = st.toggle("Lock team context", value=st.session_state.locked_team is not None)
+    if use_locked_team:
+        st.session_state.locked_team = st.selectbox("Locked team", TEAMS, index=0)
+    else:
+        st.session_state.locked_team = None
+
+    if st.button("🗑️ Clear last event"):
+        st.session_state.last_event = None
+        st.toast("Last event cleared.")
+
+    st.markdown("---")
     st.markdown("### 🔢 Event Number Generator")
     st.caption("Auto-rolls whenever an event asks to draw a random number.")
 
@@ -135,44 +177,47 @@ for i, tab in enumerate(tabs):
     with tab:
         selected_phase = phases[i]
 
+        phase_events = EVENTS[selected_phase]
+
+        filter_key = f"filter_{selected_phase}"
+        search_term = st.session_state.get(filter_key, "").strip().lower()
+
+        if search_term:
+            filtered_events = [
+                ev for ev in phase_events
+                if search_term in ev.get("title", "").lower() or search_term in ev.get("effect", "").lower()
+            ]
+        else:
+            filtered_events = phase_events
+
         st.markdown(
             f"<span class='pill'>{PHASE_ICONS.get(selected_phase,'')} {selected_phase}</span>",
             unsafe_allow_html=True
         )
-        st.markdown(f"<span class='small'>{len(EVENTS[selected_phase])} scenarios available</span>", unsafe_allow_html=True)
+        st.markdown(
+            f"<span class='small'>{len(filtered_events)} / {len(phase_events)} scenarios available</span>",
+            unsafe_allow_html=True
+        )
 
         st.write("")
 
         if st.button("🎲 Generate Event", key=f"gen_{selected_phase}"):
             with st.spinner("Rolling the dice..."):
                 time.sleep(0.4)
+            if filtered_events:
+                original_events = EVENTS[selected_phase]
+                EVENTS[selected_phase] = filtered_events
+                roll_event_for_phase(selected_phase)
+                EVENTS[selected_phase] = original_events
+            else:
+                st.warning("No events match this filter. Clear or adjust the filter.")
 
-            recent_titles = {h["title"] for h in st.session_state.history[:3]}
-            event = weighted_random_event(
-                EVENTS[selected_phase],
-                st.session_state.event_weights,
-                recent_titles
-            )
-            effect_text = event.get("effect", "")
-            team = random.choice(TEAMS) if requires_team_draw(event) else None
-            player_number = random.randint(1, 15) if requires_player_draw(event) else None
-            intensity = get_event_intensity(event)
-            event_roll = generate_event_number(event)
-
-            st.session_state.last_event = {
-                "phase": selected_phase,
-                "title": event["title"],
-                "effect": effect_text,
-                "team": team,
-                "player": f"#{player_number} (Highest Overall)" if player_number else None,
-                "intensity": intensity,
-                "event_roll": event_roll
-            }
-
-            st.session_state.history.insert(0, st.session_state.last_event)
-            st.session_state.history = st.session_state.history[:5]
-
-            st.toast("🏀 New event generated!", icon="🎲")
+        st.write("")
+        st.text_input(
+            "Filter events in this phase",
+            key=filter_key,
+            placeholder="Type keyword (title or effect)..."
+        )
 
 # -----------------------------
 # Display event
@@ -226,21 +271,3 @@ if st.session_state.last_event:
     #     f"{e['title']}\n\n{e['effect']}\n\nTeam: {e['team']}\nPlayer: {e['player']}{roll_line}",
     #     language="text"
     # )
-
-# -----------------------------
-# History
-# -----------------------------
-if st.session_state.history:
-    with st.expander("🕘 Recent Events"):
-        for h in st.session_state.history:
-            context_bits = []
-            if h.get("team"):
-                context_bits.append(h["team"])
-            if h.get("player"):
-                context_bits.append(h["player"])
-
-            context_text = " | ".join(context_bits)
-            if context_text:
-                st.markdown(f"• **{h['title']}** — {context_text} ({h['phase']})")
-            else:
-                st.markdown(f"• **{h['title']}** — ({h['phase']})")
