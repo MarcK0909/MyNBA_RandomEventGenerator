@@ -1,13 +1,14 @@
 import streamlit as st  # type: ignore
+import json
 import random
 import time
+from datetime import date, datetime
+from pathlib import Path
 from constants import DEFAULT_EVENT_WEIGHTS, PHASE_ICONS, TEAMS
 from event_engine import (
     generate_event_number,
     get_event_intensity,
     load_events,
-    requires_player_draw,
-    requires_team_draw,
     weighted_random_event,
 )
 
@@ -24,6 +25,143 @@ st.set_page_config(
 # Load events
 # -----------------------------
 EVENTS = load_events("events.json")
+phases = list(EVENTS.keys())
+NOTEPAD_PATH = Path("event_notepad.json")
+
+
+def load_notepad_items():
+    if not NOTEPAD_PATH.exists():
+        return []
+
+    try:
+        with NOTEPAD_PATH.open("r", encoding="utf-8") as f:
+            data = json.load(f)
+        if isinstance(data, list):
+            return data
+    except Exception:
+        return []
+    return []
+
+
+def save_notepad_items(items):
+    with NOTEPAD_PATH.open("w", encoding="utf-8") as f:
+        json.dump(items, f, indent=2)
+
+
+def _event_source_key(event_payload: dict) -> str:
+    return "|".join([
+        str(event_payload.get("phase", "")),
+        str(event_payload.get("title", "")),
+        str(event_payload.get("effect", "")),
+        str(event_payload.get("team", "")),
+        str(event_payload.get("player", "")),
+        str((event_payload.get("event_roll") or {}).get("value", "")),
+    ])
+
+
+def prefill_notepad_adder_for_event(event_payload: dict):
+    src_key = _event_source_key(event_payload)
+    if st.session_state.get("notepad_draft_source_key") == src_key:
+        return
+
+    team = event_payload.get("team")
+    player = event_payload.get("player")
+    target_text = " • ".join([v for v in [team, player] if v])
+
+    title = event_payload.get("title", "Generated Event")
+    effect = event_payload.get("effect", "")
+    phase = event_payload.get("phase", "Any")
+
+    st.session_state.notepad_draft_item = f"Track: {title}" + (f" ({target_text})" if target_text else "")
+    st.session_state.notepad_draft_details = (
+        f"Event: {title}\n"
+        f"Effect: {effect}" + (f"\nTarget: {target_text}" if target_text else "")
+    )
+    st.session_state.notepad_draft_due = date.today()
+    st.session_state.notepad_draft_phase = phase if phase in phases else "Any"
+    st.session_state.notepad_draft_source_key = src_key
+
+
+def render_notepad_items_panel():
+    st.markdown("### 📝 Event Notepad")
+    st.caption("Open items are shown here while you manage event changes.")
+
+    show_open_only = st.toggle("Show open only", value=True, key="notepad_open_only")
+
+    notes_dirty = False
+    remove_ids = []
+
+    visible_items = [
+        n for n in st.session_state.notepad_items
+        if (not show_open_only) or (not n.get("done", False))
+    ]
+
+    if not visible_items:
+        st.caption("No notepad items yet.")
+    else:
+        for item in visible_items:
+            iid = item.get("id")
+            done_key = f"note_done_{iid}"
+
+            cols = st.columns([0.14, 0.62, 0.24])
+            with cols[0]:
+                is_done = st.checkbox("Done", value=item.get("done", False), key=done_key, label_visibility="collapsed")
+            with cols[1]:
+                due_txt = item.get("due", "")
+                phase_txt = item.get("phase", "Any")
+                st.markdown(f"**{item.get('title', '')}**")
+                meta_line = f"Due: {due_txt}"
+                if phase_txt and phase_txt != "Any":
+                    meta_line += f" • {phase_txt}"
+                st.caption(meta_line)
+                if item.get("details"):
+                    st.caption(item.get("details"))
+            with cols[2]:
+                if st.button("Remove", key=f"note_remove_{iid}"):
+                    remove_ids.append(iid)
+
+            if is_done != item.get("done", False):
+                item["done"] = is_done
+                notes_dirty = True
+
+    if remove_ids:
+        st.session_state.notepad_items = [n for n in st.session_state.notepad_items if n.get("id") not in set(remove_ids)]
+        notes_dirty = True
+
+    if notes_dirty:
+        save_notepad_items(st.session_state.notepad_items)
+
+
+def render_notepad_adder():
+    st.markdown("### 📝 Add Notepad Item")
+    st.caption("Track non-permanent changes and when to revert them.")
+
+    if st.session_state.get("notepad_draft_phase") not in (["Any"] + phases):
+        st.session_state.notepad_draft_phase = "Any"
+
+    with st.form("notepad_add_form", clear_on_submit=False):
+        note_title = st.text_input("Item", key="notepad_draft_item", placeholder="Example: Revert SG back to bench role")
+        note_details = st.text_area("Details", key="notepad_draft_details", placeholder="What changed and what to undo")
+        note_due = st.date_input("Due / Review Date", key="notepad_draft_due")
+        note_phase = st.selectbox("Related Phase", ["Any"] + phases, key="notepad_draft_phase")
+        submitted = st.form_submit_button("Add to Notepad")
+
+        if submitted:
+            if note_title.strip():
+                new_item = {
+                    "id": int(datetime.now().timestamp() * 1000),
+                    "title": note_title.strip(),
+                    "details": note_details.strip(),
+                    "due": note_due.isoformat(),
+                    "phase": note_phase,
+                    "done": False,
+                    "created_at": datetime.now().isoformat(timespec="seconds")
+                }
+                st.session_state.notepad_items.insert(0, new_item)
+                save_notepad_items(st.session_state.notepad_items)
+                st.toast("Notepad item added.")
+            else:
+                st.warning("Please add a title for the notepad item.")
 
 
 def roll_event_for_phase(phase_name: str):
@@ -35,12 +173,9 @@ def roll_event_for_phase(phase_name: str):
     )
 
     effect_text = event.get("effect", "")
-    team = None
-    if requires_team_draw(event):
-        locked_team = st.session_state.get("locked_team")
-        team = locked_team if locked_team else random.choice(TEAMS)
-
-    player_number = random.randint(1, 15) if requires_player_draw(event) else None
+    locked_team = st.session_state.get("locked_team")
+    team = locked_team if locked_team else random.choice(TEAMS)
+    player_number = random.randint(1, 15)
     intensity = get_event_intensity(event)
     event_roll = generate_event_number(event)
 
@@ -49,10 +184,11 @@ def roll_event_for_phase(phase_name: str):
         "title": event["title"],
         "effect": effect_text,
         "team": team,
-        "player": f"#{player_number} (Highest Overall)" if player_number else None,
+        "player": f"#{player_number} (Highest Overall)",
         "intensity": intensity,
         "event_roll": event_roll
     }
+    prefill_notepad_adder_for_event(st.session_state.last_event)
     st.toast("🏀 New event generated!", icon="🎲")
 
 # -----------------------------
@@ -66,6 +202,24 @@ if "event_weights" not in st.session_state:
 
 if "locked_team" not in st.session_state:
     st.session_state.locked_team = None
+
+if "notepad_items" not in st.session_state:
+    st.session_state.notepad_items = load_notepad_items()
+
+if "notepad_draft_item" not in st.session_state:
+    st.session_state.notepad_draft_item = ""
+
+if "notepad_draft_details" not in st.session_state:
+    st.session_state.notepad_draft_details = ""
+
+if "notepad_draft_due" not in st.session_state:
+    st.session_state.notepad_draft_due = date.today()
+
+if "notepad_draft_phase" not in st.session_state:
+    st.session_state.notepad_draft_phase = "Any"
+
+if "notepad_draft_source_key" not in st.session_state:
+    st.session_state.notepad_draft_source_key = None
 
 # -----------------------------
 # CSS
@@ -165,102 +319,110 @@ with st.sidebar:
     else:
         st.caption("No number-roll event generated yet.")
 
-# -----------------------------
-# Phase selection
-# -----------------------------
-phases = list(EVENTS.keys())
-tabs = st.tabs([f"{PHASE_ICONS.get(p,'')} {p}" for p in phases])
+main_col, notes_col = st.columns([0.68, 0.32], gap="large")
 
-selected_phase = None
+with notes_col:
+    render_notepad_items_panel()
 
-for i, tab in enumerate(tabs):
-    with tab:
-        selected_phase = phases[i]
+with main_col:
+    # -----------------------------
+    # Phase selection
+    # -----------------------------
+    tabs = st.tabs([f"{PHASE_ICONS.get(p,'')} {p}" for p in phases])
 
-        phase_events = EVENTS[selected_phase]
+    selected_phase = None
 
-        filter_key = f"filter_{selected_phase}"
-        search_term = st.session_state.get(filter_key, "").strip().lower()
+    for i, tab in enumerate(tabs):
+        with tab:
+            selected_phase = phases[i]
 
-        if search_term:
-            filtered_events = [
-                ev for ev in phase_events
-                if search_term in ev.get("title", "").lower() or search_term in ev.get("effect", "").lower()
-            ]
-        else:
-            filtered_events = phase_events
+            phase_events = EVENTS[selected_phase]
 
-        st.markdown(
-            f"<span class='pill'>{PHASE_ICONS.get(selected_phase,'')} {selected_phase}</span>",
-            unsafe_allow_html=True
-        )
-        st.markdown(
-            f"<span class='small'>{len(filtered_events)} / {len(phase_events)} scenarios available</span>",
-            unsafe_allow_html=True
-        )
+            filter_key = f"filter_{selected_phase}"
+            search_term = st.session_state.get(filter_key, "").strip().lower()
 
-        st.write("")
-
-        if st.button("🎲 Generate Event", key=f"gen_{selected_phase}"):
-            with st.spinner("Rolling the dice..."):
-                time.sleep(0.4)
-            if filtered_events:
-                original_events = EVENTS[selected_phase]
-                EVENTS[selected_phase] = filtered_events
-                roll_event_for_phase(selected_phase)
-                EVENTS[selected_phase] = original_events
+            if search_term:
+                filtered_events = [
+                    ev for ev in phase_events
+                    if search_term in ev.get("title", "").lower() or search_term in ev.get("effect", "").lower()
+                ]
             else:
-                st.warning("No events match this filter. Clear or adjust the filter.")
+                filtered_events = phase_events
 
-        st.write("")
-        st.text_input(
-            "Filter events in this phase",
-            key=filter_key,
-            placeholder="Type keyword (title or effect)..."
-        )
+            st.markdown(
+                f"<span class='pill'>{PHASE_ICONS.get(selected_phase,'')} {selected_phase}</span>",
+                unsafe_allow_html=True
+            )
+            st.markdown(
+                f"<span class='small'>{len(filtered_events)} / {len(phase_events)} scenarios available</span>",
+                unsafe_allow_html=True
+            )
 
-# -----------------------------
-# Display event
-# -----------------------------
-if st.session_state.last_event:
-    e = st.session_state.last_event
+            st.write("")
 
-    st.markdown("<hr>", unsafe_allow_html=True)
-    st.markdown("## 🎲 Generated Event")
+            if st.button("🎲 Generate Event", key=f"gen_{selected_phase}"):
+                with st.spinner("Rolling the dice..."):
+                    time.sleep(0.4)
+                if filtered_events:
+                    original_events = EVENTS[selected_phase]
+                    EVENTS[selected_phase] = filtered_events
+                    roll_event_for_phase(selected_phase)
+                    EVENTS[selected_phase] = original_events
+                else:
+                    st.warning("No events match this filter. Clear or adjust the filter.")
 
-    st.markdown(f"""
-    <div class="card">
-        <span class="pill">🔥 {e['intensity']}</span>
-        <h3>📌 {e['title']}</h3>
-        <p>{e['effect']}</p>
-    </div>
-    """, unsafe_allow_html=True)
+            st.write("")
+            st.text_input(
+                "Filter events in this phase",
+                key=filter_key,
+                placeholder="Type keyword (title or effect)..."
+            )
 
-    entity_cards = []
-    if e.get("team"):
-        entity_cards.append(("🏀 Team", e["team"]))
-    if e.get("player"):
-        entity_cards.append(("👤 Player", e["player"]))
+    # -----------------------------
+    # Display event
+    # -----------------------------
+    if st.session_state.last_event:
+        e = st.session_state.last_event
 
-    if entity_cards:
-        cols = st.columns(len(entity_cards))
-        for col, (label, value) in zip(cols, entity_cards):
-            with col:
-                st.markdown(f"""
-                <div class="card">
-                    <h4>{label}</h4>
-                    <p>{value}</p>
-                </div>
-                """, unsafe_allow_html=True)
+        st.markdown("<hr>", unsafe_allow_html=True)
+        st.markdown("## 🎲 Generated Event")
 
-    if e.get("event_roll"):
-        roll = e["event_roll"]
         st.markdown(f"""
         <div class="card">
-            <h4>🔢 Random Number Draw</h4>
-            <p><strong>{roll['value']}</strong> (Range {roll['label']})</p>
+            <span class="pill">🔥 {e['intensity']}</span>
+            <h3>📌 {e['title']}</h3>
+            <p>{e['effect']}</p>
         </div>
         """, unsafe_allow_html=True)
+
+        entity_cards = []
+        if e.get("team"):
+            entity_cards.append(("🏀 Team", e["team"]))
+        if e.get("player"):
+            entity_cards.append(("👤 Player", e["player"]))
+
+        if entity_cards:
+            cols = st.columns(len(entity_cards))
+            for col, (label, value) in zip(cols, entity_cards):
+                with col:
+                    st.markdown(f"""
+                    <div class="card">
+                        <h4>{label}</h4>
+                        <p>{value}</p>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+        if e.get("event_roll"):
+            roll = e["event_roll"]
+            st.markdown(f"""
+            <div class="card">
+                <h4>🔢 Random Number Draw</h4>
+                <p><strong>{roll['value']}</strong> (Range {roll['label']})</p>
+            </div>
+            """, unsafe_allow_html=True)
+
+    st.markdown("<hr>", unsafe_allow_html=True)
+    render_notepad_adder()
 
     # # Copy-friendly block
     # roll_line = ""
