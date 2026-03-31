@@ -5,6 +5,9 @@ import time
 import re
 
 
+VALID_INTENSITIES = {"Low Impact", "Medium Impact", "High Impact", "Chaos"}
+
+
 def infer_intensity(event: dict) -> str:
     text = f"{event.get('title', '')} {event.get('effect', '')}".lower()
 
@@ -36,7 +39,7 @@ def weighted_random_event(events: list, weight_map: dict, recent_titles: set) ->
     weights = []
 
     for event in events:
-        intensity = infer_intensity(event)
+        intensity = get_event_intensity(event)
         base_weight = max(weight_map.get(intensity, 1), 0.0)
         if base_weight == 0:
             continue
@@ -71,12 +74,7 @@ def extract_draw_range(effect_text: str):
     return (start, end)
 
 
-def generate_event_number(effect_text: str):
-    range_tuple = extract_draw_range(effect_text)
-    if not range_tuple:
-        return None
-
-    start, end = range_tuple
+def _roll_payload(start: int, end: int):
     value = random.randint(start, end)
     return {
         "value": value,
@@ -86,15 +84,48 @@ def generate_event_number(effect_text: str):
     }
 
 
-def requires_team_draw(effect_text: str) -> bool:
-    if not effect_text:
-        return False
+def generate_event_number(event: dict):
+    # Preferred structured metadata path
+    roll_type = event.get("roll_type")
+    if roll_type == "range":
+        roll_min = event.get("roll_min")
+        roll_max = event.get("roll_max")
+        if isinstance(roll_min, int) and isinstance(roll_max, int):
+            start, end = (roll_min, roll_max) if roll_min <= roll_max else (roll_max, roll_min)
+            return _roll_payload(start, end)
+
+    # Backward-compatible text parsing fallback
+    effect_text = event.get("effect", "")
+    range_tuple = extract_draw_range(effect_text)
+    if not range_tuple:
+        return None
+
+    start, end = range_tuple
+    return _roll_payload(start, end)
+
+
+def get_event_intensity(event: dict) -> str:
+    impact = event.get("impact")
+    if isinstance(impact, str) and impact in VALID_INTENSITIES:
+        return impact
+    return infer_intensity(event)
+
+
+def requires_team_draw(event: dict) -> bool:
+    requires_team = event.get("requires_team")
+    if isinstance(requires_team, bool):
+        return requires_team
+
+    effect_text = event.get("effect", "")
     return "team drawn" in effect_text.lower()
 
 
-def requires_player_draw(effect_text: str) -> bool:
-    if not effect_text:
-        return False
+def requires_player_draw(event: dict) -> bool:
+    requires_player = event.get("requires_player")
+    if isinstance(requires_player, bool):
+        return requires_player
+
+    effect_text = event.get("effect", "")
     return "player drawn" in effect_text.lower()
 
 # -----------------------------
@@ -281,10 +312,10 @@ for i, tab in enumerate(tabs):
                 recent_titles
             )
             effect_text = event.get("effect", "")
-            team = random.choice(TEAMS) if requires_team_draw(effect_text) else None
-            player_number = random.randint(1, 15) if requires_player_draw(effect_text) else None
-            intensity = infer_intensity(event)
-            event_roll = generate_event_number(effect_text)
+            team = random.choice(TEAMS) if requires_team_draw(event) else None
+            player_number = random.randint(1, 15) if requires_player_draw(event) else None
+            intensity = get_event_intensity(event)
+            event_roll = generate_event_number(event)
 
             st.session_state.last_event = {
                 "phase": selected_phase,
