@@ -3,11 +3,15 @@ import random
 import re
 
 from constants import VALID_INTENSITIES
+from event_schema import validate_events_schema
 
 
 def load_events(path: str = "events.json") -> dict:
     with open(path, "r") as f:
-        return json.load(f)
+        events = json.load(f)
+
+    validate_events_schema(events)
+    return events
 
 
 def infer_intensity(event: dict) -> str:
