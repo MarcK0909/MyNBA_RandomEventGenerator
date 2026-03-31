@@ -1,132 +1,15 @@
 import streamlit as st
-import json
 import random
 import time
-import re
-
-
-VALID_INTENSITIES = {"Low Impact", "Medium Impact", "High Impact", "Chaos"}
-
-
-def infer_intensity(event: dict) -> str:
-    text = f"{event.get('title', '')} {event.get('effect', '')}".lower()
-
-    chaos_markers = [
-        "forced to retire", "entire season", "100–200 days", "100-200 days",
-        "must be traded", "superstar trade demand", "fire gm and head coach",
-        "set all attributes to 25", "tear", "acl", "350 days"
-    ]
-    high_markers = [
-        "trade", "fire coach", "suspend", "90 days", "severe injury",
-        "out 30 days", "force loss", "force win", "decline", "decrease all"
-    ]
-    medium_markers = [
-        "one week", "5 games", "minutes restriction", "offensive consistency",
-        "defensive consistency", "potential by 5", "durability"
-    ]
-
-    if any(marker in text for marker in chaos_markers):
-        return "Chaos"
-    if any(marker in text for marker in high_markers):
-        return "High Impact"
-    if any(marker in text for marker in medium_markers):
-        return "Medium Impact"
-    return "Low Impact"
-
-
-def weighted_random_event(events: list, weight_map: dict, recent_titles: set) -> dict:
-    weighted_pool = []
-    weights = []
-
-    for event in events:
-        intensity = get_event_intensity(event)
-        base_weight = max(weight_map.get(intensity, 1), 0.0)
-        if base_weight == 0:
-            continue
-
-        if event.get("title") in recent_titles:
-            base_weight *= 0.35
-
-        weighted_pool.append(event)
-        weights.append(base_weight)
-
-    if not weighted_pool:
-        return random.choice(events)
-
-    return random.choices(weighted_pool, weights=weights, k=1)[0]
-
-
-def extract_draw_range(effect_text: str):
-    if not effect_text:
-        return None
-
-    # Supports variations like:
-    # "Draw a number between 1 and 30"
-    # "draw a number between 1-30"
-    match = re.search(r"draw\s+a\s+number\s+between\s+(\d+)\s*(?:and|-)\s*(\d+)", effect_text, re.IGNORECASE)
-    if not match:
-        return None
-
-    start = int(match.group(1))
-    end = int(match.group(2))
-    if start > end:
-        start, end = end, start
-    return (start, end)
-
-
-def _roll_payload(start: int, end: int):
-    value = random.randint(start, end)
-    return {
-        "value": value,
-        "start": start,
-        "end": end,
-        "label": f"{start}-{end}"
-    }
-
-
-def generate_event_number(event: dict):
-    # Preferred structured metadata path
-    roll_type = event.get("roll_type")
-    if roll_type == "range":
-        roll_min = event.get("roll_min")
-        roll_max = event.get("roll_max")
-        if isinstance(roll_min, int) and isinstance(roll_max, int):
-            start, end = (roll_min, roll_max) if roll_min <= roll_max else (roll_max, roll_min)
-            return _roll_payload(start, end)
-
-    # Backward-compatible text parsing fallback
-    effect_text = event.get("effect", "")
-    range_tuple = extract_draw_range(effect_text)
-    if not range_tuple:
-        return None
-
-    start, end = range_tuple
-    return _roll_payload(start, end)
-
-
-def get_event_intensity(event: dict) -> str:
-    impact = event.get("impact")
-    if isinstance(impact, str) and impact in VALID_INTENSITIES:
-        return impact
-    return infer_intensity(event)
-
-
-def requires_team_draw(event: dict) -> bool:
-    requires_team = event.get("requires_team")
-    if isinstance(requires_team, bool):
-        return requires_team
-
-    effect_text = event.get("effect", "")
-    return "team drawn" in effect_text.lower()
-
-
-def requires_player_draw(event: dict) -> bool:
-    requires_player = event.get("requires_player")
-    if isinstance(requires_player, bool):
-        return requires_player
-
-    effect_text = event.get("effect", "")
-    return "player drawn" in effect_text.lower()
+from constants import DEFAULT_EVENT_WEIGHTS, PHASE_ICONS, TEAMS
+from event_engine import (
+    generate_event_number,
+    get_event_intensity,
+    load_events,
+    requires_player_draw,
+    requires_team_draw,
+    weighted_random_event,
+)
 
 # -----------------------------
 # Page config
@@ -140,38 +23,7 @@ st.set_page_config(
 # -----------------------------
 # Load events
 # -----------------------------
-with open("events.json", "r") as f:
-    EVENTS = json.load(f)
-
-# -----------------------------
-# Constants
-# -----------------------------
-PHASE_ICONS = {
-    "Regular Season": "🏀",
-    "Regular Season Post-Deadline": "⏳",
-    "Trade Deadline": "🔁",
-    "Playoffs": "🏆",
-    "Draft Combine": "📏",
-    "Draft": "📋",
-    "Free Agency": "💼",
-    "Summer League": "🌞",
-    "Training Camp": "🏋️",
-    "Coaching Carousel": "🎩"
-}
-
-INTENSITY_TAGS = ["Low Impact", "Medium Impact", "High Impact", "Chaos"]
-
-TEAMS = [
-    "Atlanta Hawks", "Boston Celtics", "Brooklyn Nets", "Charlotte Hornets",
-    "Chicago Bulls", "Cleveland Cavaliers", "Dallas Mavericks", "Denver Nuggets",
-    "Detroit Pistons", "Golden State Warriors", "Houston Rockets", "Indiana Pacers",
-    "LA Clippers", "Los Angeles Lakers", "Memphis Grizzlies", "Miami Heat",
-    "Milwaukee Bucks", "Minnesota Timberwolves", "New Orleans Pelicans",
-    "New York Knicks", "Oklahoma City Thunder", "Orlando Magic",
-    "Philadelphia 76ers", "Phoenix Suns", "Portland Trail Blazers",
-    "Sacramento Kings", "San Antonio Spurs", "Toronto Raptors",
-    "Utah Jazz", "Washington Wizards", "Austin Bullets", "Seattle Supersonics "
-]
+EVENTS = load_events("events.json")
 
 # -----------------------------
 # Session state
@@ -183,12 +35,7 @@ if "last_event" not in st.session_state:
     st.session_state.last_event = None
 
 if "event_weights" not in st.session_state:
-    st.session_state.event_weights = {
-        "Low Impact": 45,
-        "Medium Impact": 35,
-        "High Impact": 15,
-        "Chaos": 5
-    }
+    st.session_state.event_weights = DEFAULT_EVENT_WEIGHTS.copy()
 
 # -----------------------------
 # CSS
@@ -255,12 +102,7 @@ with st.sidebar:
     weight_total = low_w + med_w + high_w + chaos_w
     if weight_total == 0:
         st.warning("All tiers are set to 0. Using default weighting.")
-        st.session_state.event_weights = {
-            "Low Impact": 45,
-            "Medium Impact": 35,
-            "High Impact": 15,
-            "Chaos": 5
-        }
+        st.session_state.event_weights = DEFAULT_EVENT_WEIGHTS.copy()
     else:
         st.session_state.event_weights = {
             "Low Impact": low_w,
