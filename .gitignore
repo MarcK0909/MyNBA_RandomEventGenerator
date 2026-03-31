@@ -1,0 +1,28 @@
+# Python cache / bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build / packaging artifacts
+build/
+dist/
+*.egg-info/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# macOS
+.DS_Store
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Editor / tooling
+.vscode/
+.idea/
+
+# Logs
+*.log
