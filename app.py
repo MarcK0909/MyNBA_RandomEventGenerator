@@ -5,7 +5,7 @@ import random
 import time
 from datetime import date, datetime
 from pathlib import Path
-from constants import DEFAULT_EVENT_WEIGHTS, PHASE_ICONS, TEAMS
+from constants import DEFAULT_EVENT_WEIGHTS, TEAMS
 from event_engine import (
     generate_event_number,
     get_event_intensity,
@@ -389,9 +389,8 @@ with st.sidebar:
     low_w = st.slider("Low Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Low Impact"], step=5)
     med_w = st.slider("Medium Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Medium Impact"], step=5)
     high_w = st.slider("High Impact", min_value=0, max_value=100, value=st.session_state.event_weights["High Impact"], step=5)
-    chaos_w = st.slider("Chaos", min_value=0, max_value=100, value=st.session_state.event_weights["Chaos"], step=5)
 
-    weight_total = low_w + med_w + high_w + chaos_w
+    weight_total = low_w + med_w + high_w
     if weight_total == 0:
         st.warning("All tiers are set to 0. Using default weighting.")
         st.session_state.event_weights = DEFAULT_EVENT_WEIGHTS.copy()
@@ -399,8 +398,7 @@ with st.sidebar:
         st.session_state.event_weights = {
             "Low Impact": low_w,
             "Medium Impact": med_w,
-            "High Impact": high_w,
-            "Chaos": chaos_w
+            "High Impact": high_w
         }
 
     st.caption(f"Current total weight: {sum(st.session_state.event_weights.values())}")
@@ -436,7 +434,7 @@ with main_col:
     # -----------------------------
     # Phase selection
     # -----------------------------
-    tabs = st.tabs([f"{PHASE_ICONS.get(p,'')} {p}" for p in phases])
+    tabs = st.tabs([p for p in phases])
 
     selected_phase = None
 
@@ -458,7 +456,7 @@ with main_col:
                 filtered_events = phase_events
 
             st.markdown(
-                f"<span class='pill'>{PHASE_ICONS.get(selected_phase,'')} {selected_phase}</span>",
+                f"<span class='pill'><strong>{selected_phase}</strong></span>",
                 unsafe_allow_html=True
             )
             st.markdown(
@@ -505,9 +503,9 @@ with main_col:
 
         entity_cards = []
         if e.get("team"):
-            entity_cards.append(("🏀 Team", e["team"]))
+            entity_cards.append(("Team", e["team"]))
         if e.get("player"):
-            entity_cards.append(("👤 Player", e["player"]))
+            entity_cards.append(("Player", e["player"]))
 
         if entity_cards:
             cols = st.columns(len(entity_cards))
