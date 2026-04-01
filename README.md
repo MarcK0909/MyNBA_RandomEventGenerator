@@ -35,11 +35,12 @@ Generate realistic random events by season phase, with weighted outcomes and aut
 
 - Python 3.10+ (3.12 recommended)
 - Streamlit
+- Firebase Admin SDK (for Firestore-backed notepad persistence)
 
 Install dependencies:
 
 ```bash
-pip install streamlit
+pip install -r requirements.txt
 ```
 
 ---
