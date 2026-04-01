@@ -5,6 +5,7 @@ import random
 import time
 from datetime import date, datetime
 from pathlib import Path
+from typing import Any, cast
 from constants import DEFAULT_EVENT_WEIGHTS, TEAMS
 from event_engine import (
     generate_event_number,
@@ -67,18 +68,22 @@ def get_firestore_doc_ref():
     except (ImportError, KeyError, AttributeError) as exc:
         logger.warning("Firestore client unavailable: %s", exc)
         return None
-        raise
+    except Exception:
         logger.exception("Unexpected error while initializing Firestore")
         return None
+
+
+def get_storage_backend_label() -> str:
+    return "Firestore" if get_firestore_doc_ref() is not None else "Local JSON (fallback)"
 
 
 def load_notepad_items():
     doc_ref = get_firestore_doc_ref()
     if doc_ref is not None:
         try:
-            snapshot = doc_ref.get()
-            if snapshot.exists:
-                payload = snapshot.to_dict() or {}
+            snapshot = cast(Any, doc_ref.get())
+            if bool(getattr(snapshot, "exists", False)):
+                payload = cast(dict, snapshot.to_dict() or {})
                 items = payload.get("items", [])
                 if isinstance(items, list):
                     return items
@@ -439,8 +444,10 @@ st.write("")
 # Weight controls
 # -----------------------------
 with st.sidebar:
-    st.markdown("### 🎛️ Event Weighting")
+    st.markdown("Event Weighting")
     st.caption("Adjust how often each impact tier appears.")
+
+    st.caption(f"Active backend: {get_storage_backend_label()}")
 
     low_w = st.slider("Low Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Low Impact"], step=5)
     med_w = st.slider("Medium Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Medium Impact"], step=5)
@@ -496,8 +503,9 @@ with app_tabs[0]:
                 if phase_idx < len(phases):
                     phase_name = phases[phase_idx]
                     is_selected = st.session_state.selected_phase == phase_name
+                    phase_label = PHASE_BUTTON_LABELS.get(phase_name) or phase_name
                     if st.button(
-                        PHASE_BUTTON_LABELS.get(phase_name, phase_name),
+                        phase_label,
                         key=f"phase_btn_{phase_name}",
                         help=phase_name,
                         use_container_width=True,
