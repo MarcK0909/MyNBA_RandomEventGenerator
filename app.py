@@ -30,6 +30,19 @@ phases = list(EVENTS.keys())
 NOTEPAD_PATH = Path("event_notepad.json")
 logger = logging.getLogger(__name__)
 
+PHASE_BUTTON_LABELS = {
+    "Regular Season": "Regular Season",
+    "Regular Season Post-Deadline": "Post-Deadline",
+    "Trade Deadline": "Trade Deadline",
+    "Playoffs": "Playoffs",
+    "Draft Combine": "Combine",
+    "Draft": "Draft",
+    "Free Agency": "Free Agency",
+    "Summer League": "Summer League",
+    "Training Camp": "Training Camp",
+    "Coaching Carousel": "Coaching"
+}
+
 
 @st.cache_resource
 def get_firestore_doc_ref():
@@ -111,12 +124,12 @@ def save_notepad_items(items):
 
 
 def clear_notepad_title():
-    st.session_state.notepad_draft_item = ""
+    st.session_state.notepad_draft_item_pending = ""
     st.session_state.notepad_draft_source_key = None
 
 
 def clear_notepad_details():
-    st.session_state.notepad_draft_details = ""
+    st.session_state.notepad_draft_details_pending = ""
     st.session_state.notepad_draft_source_key = None
 
 
@@ -157,11 +170,13 @@ def add_notepad_item():
     }
     st.session_state.notepad_items.insert(0, new_item)
     save_notepad_items(st.session_state.notepad_items)
-    clear_notepad_title()
-    clear_notepad_details()
-    st.session_state.notepad_draft_due = date.today()
-    st.session_state.notepad_draft_phase = "Any"
+    st.session_state.notepad_draft_item_pending = ""
+    st.session_state.notepad_draft_details_pending = ""
+    st.session_state.notepad_draft_due_pending = date.today()
+    st.session_state.notepad_draft_phase_pending = "Any"
+    st.session_state.notepad_draft_source_key = None
     st.toast("Notepad item added.")
+    st.rerun()
 
 
 def _event_source_key(event_payload: dict) -> str:
@@ -188,13 +203,13 @@ def prefill_notepad_adder_for_event(event_payload: dict):
     effect = event_payload.get("effect", "")
     phase = event_payload.get("phase", "Any")
 
-    st.session_state.notepad_draft_item = f"Track: {title}" + (f" ({target_text})" if target_text else "")
-    st.session_state.notepad_draft_details = (
+    st.session_state.notepad_draft_item_pending = f"Track: {title}" + (f" ({target_text})" if target_text else "")
+    st.session_state.notepad_draft_details_pending = (
         f"Event: {title}\n"
         f"Effect: {effect}" + (f"\nTarget: {target_text}" if target_text else "")
     )
-    st.session_state.notepad_draft_due = date.today()
-    st.session_state.notepad_draft_phase = phase if phase in phases else "Any"
+    st.session_state.notepad_draft_due_pending = date.today()
+    st.session_state.notepad_draft_phase_pending = phase if phase in phases else "Any"
     st.session_state.notepad_draft_source_key = src_key
 
 
@@ -244,23 +259,36 @@ def render_notepad_adder():
     st.markdown("### Add Notepad Item")
     st.caption("Track non-permanent changes and when to revert them.")
 
+    if "notepad_draft_item_pending" in st.session_state:
+        st.session_state.notepad_draft_item = st.session_state.pop("notepad_draft_item_pending")
+    if "notepad_draft_details_pending" in st.session_state:
+        st.session_state.notepad_draft_details = st.session_state.pop("notepad_draft_details_pending")
+    if "notepad_draft_due_pending" in st.session_state:
+        st.session_state.notepad_draft_due = st.session_state.pop("notepad_draft_due_pending")
+    if "notepad_draft_phase_pending" in st.session_state:
+        st.session_state.notepad_draft_phase = st.session_state.pop("notepad_draft_phase_pending")
+
     if st.session_state.get("notepad_draft_phase") not in (["Any"] + phases):
         st.session_state.notepad_draft_phase = "Any"
 
     title_col, title_clear = st.columns([0.80, 0.20])
     with title_col:
-        note_title = st.text_input("Item", key="notepad_draft_item", placeholder="Example: Revert SG back to bench role")
+        st.text_input("Item", key="notepad_draft_item", placeholder="Example: Revert SG back to bench role")
     with title_clear:
-        st.button("Clear", key="clear_title", on_click=clear_notepad_title, use_container_width=True)
+        if st.button("Clear", key="clear_title", use_container_width=True):
+            clear_notepad_title()
+            st.rerun()
 
     details_col, details_clear = st.columns([0.80, 0.20])
     with details_col:
-        note_details = st.text_area("Details", key="notepad_draft_details", placeholder="What changed and what to undo")
+        st.text_area("Details", key="notepad_draft_details", placeholder="What changed and what to undo")
     with details_clear:
-        st.button("Clear", key="clear_details", on_click=clear_notepad_details, use_container_width=True)
+        if st.button("Clear", key="clear_details", use_container_width=True):
+            clear_notepad_details()
+            st.rerun()
 
-    note_due = st.date_input("Due / Review Date", key="notepad_draft_due")
-    note_phase = st.selectbox("Related Phase", ["Any"] + phases, key="notepad_draft_phase")
+    st.date_input("Due / Review Date", key="notepad_draft_due")
+    st.selectbox("Related Phase", ["Any"] + phases, key="notepad_draft_phase")
 
     if st.button("Add to Notepad", key="add_notepad_item"):
         add_notepad_item()
@@ -323,6 +351,9 @@ if "notepad_draft_phase" not in st.session_state:
 if "notepad_draft_source_key" not in st.session_state:
     st.session_state.notepad_draft_source_key = None
 
+if "selected_phase" not in st.session_state:
+    st.session_state.selected_phase = phases[0]
+
 # -----------------------------
 # CSS
 # -----------------------------
@@ -356,11 +387,36 @@ hr {
     height: 1px;
     background: linear-gradient(to right, transparent, #374151, transparent);
 }
-[data-testid="stButton"] button {
-    min-width: 92px;
+/* Top-level 2-tab row: Event Generator | Notepad */
+div[role="tablist"]:has(button[role="tab"]:nth-of-type(2)):not(:has(button[role="tab"]:nth-of-type(3))) button[role="tab"] p {
+    font-size: 1.22rem;
+    font-weight: 700;
 }
-[data-testid="stButton"] button p {
-    white-space: nowrap;
+div[role="tablist"]:has(button[role="tab"]:nth-of-type(2)):not(:has(button[role="tab"]:nth-of-type(3))) {
+    display: flex;
+}
+div[role="tablist"]:has(button[role="tab"]:nth-of-type(2)):not(:has(button[role="tab"]:nth-of-type(3))) button[role="tab"]:nth-of-type(2) {
+    margin-left: 0;
+}
+div[role="tablist"]:has(button[role="tab"]:nth-of-type(2)):not(:has(button[role="tab"]:nth-of-type(3))) button[role="tab"] {
+    flex: 1 1 50%;
+    justify-content: center;
+}
+.title-banner {
+    width: fit-content;
+    margin: 0 auto 0.6rem auto;
+    padding: 0.7rem 1.2rem;
+    border-radius: 14px;
+    background: linear-gradient(135deg, #1d4ed8, #0ea5e9);
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.35);
+}
+.title-banner h1 {
+    margin: 0;
+    font-size: 2.35rem;
+    font-weight: 800;
+    line-height: 1.1;
+    color: #ffffff;
 }
 </style>
 """, unsafe_allow_html=True)
@@ -369,11 +425,11 @@ hr {
 # Header
 # -----------------------------
 st.markdown(
-    "<h1 style='text-align:center;'>🏀 MyNBA Random Event Generator</h1>",
-    unsafe_allow_html=True
-)
-st.markdown(
-    "<p class='small' style='text-align:center;'>Offline companion for MyNBA storytelling</p>",
+    """
+    <div class='title-banner'>
+        <h1>MyNBA Random Event Generator</h1>
+    </div>
+    """,
     unsafe_allow_html=True
 )
 
@@ -425,64 +481,75 @@ with st.sidebar:
     else:
         st.caption("No number-roll event generated yet.")
 
-main_col, notes_col = st.columns([0.68, 0.32], gap="large")
+app_tabs = st.tabs(["Event Generator", "Notepad"])
 
-with notes_col:
-    render_notepad_items_panel()
-
-with main_col:
+with app_tabs[0]:
     # -----------------------------
     # Phase selection
     # -----------------------------
-    tabs = st.tabs([p for p in phases])
-
-    selected_phase = None
-
-    for i, tab in enumerate(tabs):
-        with tab:
-            selected_phase = phases[i]
-
-            phase_events = EVENTS[selected_phase]
-
-            filter_key = f"filter_{selected_phase}"
-            search_term = st.session_state.get(filter_key, "").strip().lower()
-
-            if search_term:
-                filtered_events = [
-                    ev for ev in phase_events
-                    if search_term in ev.get("title", "").lower() or search_term in ev.get("effect", "").lower()
-                ]
-            else:
-                filtered_events = phase_events
-
-            st.markdown(
-                f"<span class='pill'><strong>{selected_phase}</strong></span>",
-                unsafe_allow_html=True
-            )
-            st.markdown(
-                f"<span class='small'>{len(filtered_events)} / {len(phase_events)} scenarios available</span>",
-                unsafe_allow_html=True
-            )
-
-            st.write("")
-
-            if st.button("🎲 Generate Event", key=f"gen_{selected_phase}"):
-                with st.spinner("Rolling the dice..."):
-                    time.sleep(0.4)
-                if filtered_events:
-                    original_events = EVENTS[selected_phase]
-                    EVENTS[selected_phase] = filtered_events
-                    roll_event_for_phase(selected_phase)
-                    EVENTS[selected_phase] = original_events
+    row_size = (len(phases) + 1) // 2
+    for row_idx in range(2):
+        cols = st.columns(row_size)
+        for col_idx in range(row_size):
+            phase_idx = row_idx * row_size + col_idx
+            with cols[col_idx]:
+                if phase_idx < len(phases):
+                    phase_name = phases[phase_idx]
+                    is_selected = st.session_state.selected_phase == phase_name
+                    if st.button(
+                        PHASE_BUTTON_LABELS.get(phase_name, phase_name),
+                        key=f"phase_btn_{phase_name}",
+                        help=phase_name,
+                        use_container_width=True,
+                        type="primary" if is_selected else "secondary"
+                    ):
+                        st.session_state.selected_phase = phase_name
+                        st.rerun()
                 else:
-                    st.warning("No events match this filter. Clear or adjust the filter.")
+                    st.markdown("")
 
-            st.write("")
-            st.text_input(
-                "Filter events in this phase",
-                key=filter_key,
-                placeholder="Type keyword (title or effect)..."
-            )
+    selected_phase = st.session_state.selected_phase
+    phase_events = EVENTS[selected_phase]
+
+    filter_key = f"filter_{selected_phase}"
+    search_term = st.session_state.get(filter_key, "").strip().lower()
+
+    if search_term:
+        filtered_events = [
+            ev for ev in phase_events
+            if search_term in ev.get("title", "").lower() or search_term in ev.get("effect", "").lower()
+        ]
+    else:
+        filtered_events = phase_events
+
+    st.markdown(
+        f"<span class='pill'><strong>{selected_phase}</strong></span>",
+        unsafe_allow_html=True
+    )
+    st.markdown(
+        f"<span class='small'>{len(filtered_events)} / {len(phase_events)} scenarios available</span>",
+        unsafe_allow_html=True
+    )
+
+    st.write("")
+
+    if st.button("🎲 Generate Event", key=f"gen_{selected_phase}"):
+        with st.spinner("Rolling the dice..."):
+            time.sleep(0.4)
+        if filtered_events:
+            original_events = EVENTS[selected_phase]
+            EVENTS[selected_phase] = filtered_events
+            roll_event_for_phase(selected_phase)
+            EVENTS[selected_phase] = original_events
+        else:
+            st.warning("No events match this filter. Clear or adjust the filter.")
+
+    st.write("")
+    st.text_input(
+        "Filter events in this phase",
+        key=filter_key,
+        placeholder="Type keyword (title or effect)..."
+    )
 
     # -----------------------------
     # Display event
@@ -529,6 +596,9 @@ with main_col:
 
     st.markdown("<hr>", unsafe_allow_html=True)
     render_notepad_adder()
+
+with app_tabs[1]:
+    render_notepad_items_panel()
 
     # # Copy-friendly block
     # roll_line = ""
