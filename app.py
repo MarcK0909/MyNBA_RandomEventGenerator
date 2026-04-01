@@ -182,15 +182,38 @@ def render_notepad_items_panel():
 
 
 def render_notepad_adder():
-    st.markdown("### 📝 Add Notepad Item")
+    st.markdown("### Add Notepad Item")
     st.caption("Track non-permanent changes and when to revert them.")
 
     if st.session_state.get("notepad_draft_phase") not in (["Any"] + phases):
         st.session_state.notepad_draft_phase = "Any"
 
-    with st.form("notepad_add_form", clear_on_submit=False):
+    # Handle clear button logic
+    if st.session_state.get("_clear_title_flag"):
+        st.session_state.notepad_draft_item = ""
+        st.session_state._clear_title_flag = False
+
+    if st.session_state.get("_clear_details_flag"):
+        st.session_state.notepad_draft_details = ""
+        st.session_state._clear_details_flag = False
+
+    title_col, title_clear = st.columns([0.80, 0.20])
+    with title_col:
         note_title = st.text_input("Item", key="notepad_draft_item", placeholder="Example: Revert SG back to bench role")
+    with title_clear:
+        if st.button("Clear", key="clear_title"):
+            st.session_state._clear_title_flag = True
+            st.rerun()
+
+    details_col, details_clear = st.columns([0.80, 0.20])
+    with details_col:
         note_details = st.text_area("Details", key="notepad_draft_details", placeholder="What changed and what to undo")
+    with details_clear:
+        if st.button("Clear", key="clear_details"):
+            st.session_state._clear_details_flag = True
+            st.rerun()
+
+    with st.form("notepad_add_form", clear_on_submit=False):
         note_due = st.date_input("Due / Review Date", key="notepad_draft_due")
         note_phase = st.selectbox("Related Phase", ["Any"] + phases, key="notepad_draft_phase")
         submitted = st.form_submit_button("Add to Notepad")
