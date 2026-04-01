@@ -152,7 +152,7 @@ def render_notepad_items_panel():
             iid = item.get("id")
             done_key = f"note_done_{iid}"
 
-            cols = st.columns([0.14, 0.62, 0.24])
+            cols = st.columns([0.12, 0.58, 0.30])
             with cols[0]:
                 is_done = st.checkbox("Done", value=item.get("done", False), key=done_key, label_visibility="collapsed")
             with cols[1]:
@@ -166,16 +166,14 @@ def render_notepad_items_panel():
                 if item.get("details"):
                     st.caption(item.get("details"))
             with cols[2]:
-                if st.button("Remove", key=f"note_remove_{iid}"):
-                    remove_ids.append(iid)
+                if st.button("Remove", key=f"note_remove_{iid}", use_container_width=True):
+                    st.session_state.notepad_items = [n for n in st.session_state.notepad_items if n.get("id") != iid]
+                    save_notepad_items(st.session_state.notepad_items)
+                    st.rerun()
 
             if is_done != item.get("done", False):
                 item["done"] = is_done
                 notes_dirty = True
-
-    if remove_ids:
-        st.session_state.notepad_items = [n for n in st.session_state.notepad_items if n.get("id") not in set(remove_ids)]
-        notes_dirty = True
 
     if notes_dirty:
         save_notepad_items(st.session_state.notepad_items)
@@ -325,6 +323,12 @@ hr {
     border: none;
     height: 1px;
     background: linear-gradient(to right, transparent, #374151, transparent);
+}
+[data-testid="stButton"] button {
+    min-width: 92px;
+}
+[data-testid="stButton"] button p {
+    white-space: nowrap;
 }
 </style>
 """, unsafe_allow_html=True)
