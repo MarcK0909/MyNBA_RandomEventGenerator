@@ -29,7 +29,42 @@ phases = list(EVENTS.keys())
 NOTEPAD_PATH = Path("event_notepad.json")
 
 
+@st.cache_resource
+def get_firestore_doc_ref():
+    try:
+        firebase_cfg = st.secrets.get("firebase")
+        if not firebase_cfg:
+            return None
+
+        import firebase_admin  # type: ignore
+        from firebase_admin import credentials, firestore  # type: ignore
+
+        if not firebase_admin._apps:
+            firebase_dict = dict(firebase_cfg)
+            firebase_admin.initialize_app(credentials.Certificate(firebase_dict))
+
+        db = firestore.client()
+        collection_name = st.secrets.get("firestore_collection", "mynba")
+        document_id = st.secrets.get("firestore_document", "event_notepad")
+        return db.collection(collection_name).document(document_id)
+    except Exception:
+        return None
+
+
 def load_notepad_items():
+    doc_ref = get_firestore_doc_ref()
+    if doc_ref is not None:
+        try:
+            snapshot = doc_ref.get()
+            if snapshot.exists:
+                payload = snapshot.to_dict() or {}
+                items = payload.get("items", [])
+                if isinstance(items, list):
+                    return items
+            return []
+        except Exception:
+            pass
+
     if not NOTEPAD_PATH.exists():
         return []
 
@@ -44,6 +79,20 @@ def load_notepad_items():
 
 
 def save_notepad_items(items):
+    doc_ref = get_firestore_doc_ref()
+    if doc_ref is not None:
+        try:
+            doc_ref.set(
+                {
+                    "items": items,
+                    "updated_at": datetime.now().isoformat(timespec="seconds")
+                },
+                merge=True
+            )
+            return
+        except Exception:
+            pass
+
     with NOTEPAD_PATH.open("w", encoding="utf-8") as f:
         json.dump(items, f, indent=2)
 
