@@ -1,23 +1,9 @@
-VALID_INTENSITIES = {"Low Impact", "Medium Impact", "High Impact", "Chaos"}
+VALID_INTENSITIES = {"Low Impact", "Medium Impact", "High Impact"}
 
 DEFAULT_EVENT_WEIGHTS = {
-    "Low Impact": 45,
-    "Medium Impact": 35,
-    "High Impact": 15,
-    "Chaos": 5,
-}
-
-PHASE_ICONS = {
-    "Regular Season": "🏀",
-    "Regular Season Post-Deadline": "⏳",
-    "Trade Deadline": "🔁",
-    "Playoffs": "🏆",
-    "Draft Combine": "📏",
-    "Draft": "📋",
-    "Free Agency": "💼",
-    "Summer League": "🌞",
-    "Training Camp": "🏋️",
-    "Coaching Carousel": "🎩",
+    "Low Impact": 50,
+    "Medium Impact": 30,
+    "High Impact": 20,
 }
 
 TEAMS = [

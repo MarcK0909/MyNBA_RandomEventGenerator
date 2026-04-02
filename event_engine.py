@@ -17,22 +17,20 @@ def load_events(path: str = "events.json") -> dict:
 def infer_intensity(event: dict) -> str:
     text = f"{event.get('title', '')} {event.get('effect', '')}".lower()
 
-    chaos_markers = [
-        "forced to retire", "entire season", "100–200 days", "100-200 days",
-        "must be traded", "superstar trade demand", "fire gm and head coach",
-        "set all attributes to 25", "tear", "acl", "350 days"
-    ]
     high_markers = [
         "trade", "fire coach", "suspend", "90 days", "severe injury",
         "out 30 days", "force loss", "force win", "decline", "decrease all"
+    ]
+    high_markers += [
+        "forced to retire", "entire season", "100–200 days", "100-200 days",
+        "must be traded", "superstar trade demand", "fire gm and head coach",
+        "set all attributes to 25", "tear", "acl", "350 days"
     ]
     medium_markers = [
         "one week", "5 games", "minutes restriction", "offensive consistency",
         "defensive consistency", "potential by 5", "durability"
     ]
 
-    if any(marker in text for marker in chaos_markers):
-        return "Chaos"
     if any(marker in text for marker in high_markers):
         return "High Impact"
     if any(marker in text for marker in medium_markers):
