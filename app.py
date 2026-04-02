@@ -5,7 +5,7 @@ import random
 import time
 from datetime import date, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Protocol
 from constants import DEFAULT_EVENT_WEIGHTS, TEAMS
 from event_engine import (
     generate_event_number,
@@ -45,8 +45,46 @@ PHASE_BUTTON_LABELS = {
 }
 
 
+class FirestoreSnapshot(Protocol):
+    exists: bool
+
+    def to_dict(self) -> dict[str, Any] | None:
+        ...
+
+
+class FirestoreDocRef(Protocol):
+    def get(self) -> FirestoreSnapshot:
+        ...
+
+    def set(self, document: dict[str, Any], merge: bool = False) -> None:
+        ...
+
+
+class FirestoreNotepadStore:
+    def __init__(self, doc_ref: Any):
+        self._doc_ref = doc_ref
+
+    def load_items(self) -> list[dict[str, Any]]:
+        snapshot = self._doc_ref.get()
+        if snapshot.exists:
+            payload = snapshot.to_dict() or {}
+            items = payload.get("items", [])
+            if isinstance(items, list):
+                return items
+        return []
+
+    def save_items(self, items: list[dict[str, Any]]) -> None:
+        self._doc_ref.set(
+            {
+                "items": items,
+                "updated_at": datetime.now().isoformat(timespec="seconds"),
+            },
+            merge=True,
+        )
+
+
 @st.cache_resource
-def get_firestore_doc_ref():
+def get_firestore_doc_ref() -> FirestoreNotepadStore | None:
     try:
         firebase_cfg = st.secrets.get("firebase")
         if not firebase_cfg:
@@ -64,7 +102,7 @@ def get_firestore_doc_ref():
         db = firestore.client()
         collection_name = st.secrets.get("firestore_collection", "mynba")
         document_id = st.secrets.get("firestore_document", "event_notepad")
-        return db.collection(collection_name).document(document_id)
+        return FirestoreNotepadStore(db.collection(collection_name).document(document_id))
     except (ImportError, KeyError, AttributeError) as exc:
         logger.warning("Firestore client unavailable: %s", exc)
         return None
@@ -73,21 +111,21 @@ def get_firestore_doc_ref():
         return None
 
 
+def is_firestore_available() -> bool:
+    if "firestore_available" not in st.session_state:
+        st.session_state["firestore_available"] = get_firestore_doc_ref() is not None
+    return bool(st.session_state["firestore_available"])
+
+
 def get_storage_backend_label() -> str:
-    return "Firestore" if get_firestore_doc_ref() is not None else "Local JSON (fallback)"
+    return "Firestore" if is_firestore_available() else "Local JSON (fallback)"
 
 
 def load_notepad_items():
     doc_ref = get_firestore_doc_ref()
     if doc_ref is not None:
         try:
-            snapshot = cast(Any, doc_ref.get())
-            if bool(getattr(snapshot, "exists", False)):
-                payload = cast(dict, snapshot.to_dict() or {})
-                items = payload.get("items", [])
-                if isinstance(items, list):
-                    return items
-            return []
+            return doc_ref.load_items()
         except Exception:
             logger.exception("Failed to load notepad items from Firestore")
 
@@ -110,13 +148,7 @@ def save_notepad_items(items):
     doc_ref = get_firestore_doc_ref()
     if doc_ref is not None:
         try:
-            doc_ref.set(
-                {
-                    "items": items,
-                    "updated_at": datetime.now().isoformat(timespec="seconds")
-                },
-                merge=True
-            )
+            doc_ref.save_items(items)
             return
         except Exception:
             logger.exception("Failed to save notepad items to Firestore")
@@ -135,6 +167,14 @@ def clear_notepad_title():
 
 def clear_notepad_details():
     st.session_state.notepad_draft_details_pending = ""
+    st.session_state.notepad_draft_source_key = None
+
+
+def clear_all_notepad_draft_fields():
+    st.session_state.notepad_draft_item_pending = ""
+    st.session_state.notepad_draft_details_pending = ""
+    st.session_state.notepad_draft_due_pending = date.today()
+    st.session_state.notepad_draft_phase_pending = "Any"
     st.session_state.notepad_draft_source_key = None
 
 
@@ -175,11 +215,7 @@ def add_notepad_item():
     }
     st.session_state.notepad_items.insert(0, new_item)
     save_notepad_items(st.session_state.notepad_items)
-    st.session_state.notepad_draft_item_pending = ""
-    st.session_state.notepad_draft_details_pending = ""
-    st.session_state.notepad_draft_due_pending = date.today()
-    st.session_state.notepad_draft_phase_pending = "Any"
-    st.session_state.notepad_draft_source_key = None
+    clear_all_notepad_draft_fields()
     st.toast("Notepad item added.")
     st.rerun()
 
@@ -216,6 +252,24 @@ def prefill_notepad_adder_for_event(event_payload: dict):
     st.session_state.notepad_draft_due_pending = date.today()
     st.session_state.notepad_draft_phase_pending = phase if phase in phases else "Any"
     st.session_state.notepad_draft_source_key = src_key
+
+
+def set_selected_phase(phase_name: str):
+    st.session_state.selected_phase = phase_name
+
+
+def handle_clear_title():
+    clear_notepad_title()
+    st.rerun()
+
+
+def handle_clear_details():
+    clear_notepad_details()
+    st.rerun()
+
+
+def handle_add_notepad_item():
+    add_notepad_item()
 
 
 def render_notepad_items_panel():
@@ -280,23 +334,18 @@ def render_notepad_adder():
     with title_col:
         st.text_input("Item", key="notepad_draft_item", placeholder="Example: Revert SG back to bench role")
     with title_clear:
-        if st.button("Clear", key="clear_title", use_container_width=True):
-            clear_notepad_title()
-            st.rerun()
+        st.button("Clear", key="clear_title", use_container_width=True, on_click=handle_clear_title)
 
     details_col, details_clear = st.columns([0.80, 0.20])
     with details_col:
         st.text_area("Details", key="notepad_draft_details", placeholder="What changed and what to undo")
     with details_clear:
-        if st.button("Clear", key="clear_details", use_container_width=True):
-            clear_notepad_details()
-            st.rerun()
+        st.button("Clear", key="clear_details", use_container_width=True, on_click=handle_clear_details)
 
     st.date_input("Due / Review Date", key="notepad_draft_due")
     st.selectbox("Related Phase", ["Any"] + phases, key="notepad_draft_phase")
 
-    if st.button("Add to Notepad", key="add_notepad_item"):
-        add_notepad_item()
+    st.button("Add to Notepad", key="add_notepad_item", on_click=handle_add_notepad_item)
 
 
 def roll_event_for_phase(phase_name: str):
@@ -504,15 +553,15 @@ with app_tabs[0]:
                     phase_name = phases[phase_idx]
                     is_selected = st.session_state.selected_phase == phase_name
                     phase_label = PHASE_BUTTON_LABELS.get(phase_name) or phase_name
-                    if st.button(
+                    st.button(
                         phase_label,
                         key=f"phase_btn_{phase_name}",
                         help=phase_name,
                         use_container_width=True,
-                        type="primary" if is_selected else "secondary"
-                    ):
-                        st.session_state.selected_phase = phase_name
-                        st.rerun()
+                        type="primary" if is_selected else "secondary",
+                        on_click=set_selected_phase,
+                        args=(phase_name,)
+                    )
                 else:
                     st.markdown("")
 
