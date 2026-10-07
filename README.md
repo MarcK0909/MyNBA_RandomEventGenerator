@@ -1,6 +1,6 @@
 # MyNBA Random Event Generator
 
-A clean Streamlit companion for NBA 2K MyNBA storytelling.
+A Streamlit companion for NBA 2K MyNBA storytelling, styled as your own basketball front office.
 
 Generate realistic season events, track follow-up notes, and keep everything organized in one place with Firestore-backed persistence.
 
@@ -8,6 +8,10 @@ Generate realistic season events, track follow-up notes, and keep everything org
 
 ## Highlights
 
+- Dark charcoal theme with warm orange accents and a basketball court illustration
+- Responsive generator and note editor, side by side on desktop and stacked on smaller screens
+- Impact-colored event cards, team/player context, and automatic number-draw displays
+- Notepad cards with open/completed counts and clear empty states
 - Two-tab layout for quick switching between the event generator and the notepad
 - Two-row phase selector to avoid horizontal scrolling
 - Weighted event intensity controls with a default `50 / 30 / 20` split
@@ -22,6 +26,9 @@ Generate realistic season events, track follow-up notes, and keep everything org
 ## Project Structure
 
 - `app.py` — Streamlit UI, event flow, and notepad handling
+- `ui.py` — presentation helpers and HTML components
+- `assets/theme.css` — responsive layout and component styling
+- `.streamlit/config.toml` — native Streamlit colors and dark theme
 - `event_engine.py` — event loading, weighting, and number-roll helpers
 - `event_schema.py` — event validation
 - `notepad_utils.py` — notepad helpers
@@ -49,12 +56,18 @@ pip install -r requirements.txt
 From the project folder:
 
 ```bash
-/Users/marckallergis/Desktop/MyNBA/.venv/bin/streamlit run app.py
+python3.11 -m streamlit run app.py
 ```
 
 Then open the local URL shown in terminal (usually <http://localhost:8501>).
 
+Use the Python interpreter where you installed the requirements. If a server is already running, stop it with **Ctrl+C** and restart to pick up the theme configuration.
+
 If Firestore is unavailable, the app automatically falls back to `event_notepad.json`.
+
+### Check the design refresh
+
+Compare the [original layout](docs/ui-before.png) with the [new layout](docs/ui-after.png). In the app, select a phase, generate an event, and open the Notepad tab. Narrow the browser window to check the stacked layout and compact phase grid. The refresh changes presentation only; the event engine, weighting, and persistence code are unchanged.
 
 ---
 
@@ -87,7 +100,7 @@ To trigger automatic number rolls, include this phrase pattern in the effect tex
 - Keep `events.json` valid JSON (double quotes, commas, brackets).
 - The app does not modify NBA 2K files directly; it acts as a companion decision tool.
 - You can tune realism by adjusting the 50 / 30 / 20 impact weights in the sidebar.
-- The main title uses a blue banner style in the UI.
+- The visual theme is defined in `assets/theme.css` and `.streamlit/config.toml`.
 
 ---
 
