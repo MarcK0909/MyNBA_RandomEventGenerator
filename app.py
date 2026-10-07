@@ -1,13 +1,16 @@
 import streamlit as st  # type: ignore
-import json
 import logging
 import random
 import time
-from datetime import date, datetime
+from datetime import date
 from html import escape
 from pathlib import Path
-from typing import Any, Protocol
 from constants import DEFAULT_EVENT_WEIGHTS, TEAMS
+from season_notebook import (
+    active_notes, advance_season, delete_note, save_note,
+    scheduled_notes, season_label, set_note_done,
+)
+from notepad_store import NotepadStore, NotepadStorageError
 from event_engine import (
     generate_event_number,
     get_event_intensity,
@@ -20,6 +23,7 @@ from ui import (
     html,
     render_event,
     render_header,
+    render_note_card,
     render_weight_distribution,
     section_heading,
 )
@@ -55,310 +59,244 @@ PHASE_BUTTON_LABELS = {
 }
 
 
-class FirestoreSnapshot(Protocol):
-    exists: bool
-
-    def to_dict(self) -> dict[str, Any] | None:
-        ...
-
-
-class FirestoreDocRef(Protocol):
-    def get(self) -> FirestoreSnapshot:
-        ...
-
-    def set(self, document: dict[str, Any], merge: bool = False) -> None:
-        ...
-
-
-class FirestoreNotepadStore:
-    def __init__(self, doc_ref: Any):
-        self._doc_ref = doc_ref
-
-    def load_items(self) -> list[dict[str, Any]]:
-        snapshot = self._doc_ref.get()
-        if snapshot.exists:
-            payload = snapshot.to_dict() or {}
-            items = payload.get("items", [])
-            if isinstance(items, list):
-                return items
-        return []
-
-    def save_items(self, items: list[dict[str, Any]]) -> None:
-        self._doc_ref.set(
-            {
-                "items": items,
-                "updated_at": datetime.now().isoformat(timespec="seconds"),
-            },
-            merge=True,
-        )
-
-
 @st.cache_resource
-def get_firestore_doc_ref() -> FirestoreNotepadStore | None:
+def get_firestore_doc_ref():
     try:
         firebase_cfg = st.secrets.get("firebase")
         if not firebase_cfg:
             return None
-
         import firebase_admin  # type: ignore
         from firebase_admin import credentials, firestore  # type: ignore
-
         try:
             firebase_admin.get_app()
         except ValueError:
-            firebase_dict = dict(firebase_cfg)
-            firebase_admin.initialize_app(credentials.Certificate(firebase_dict))
-
+            firebase_admin.initialize_app(credentials.Certificate(dict(firebase_cfg)))
         db = firestore.client()
-        collection_name = st.secrets.get("firestore_collection", "mynba")
-        document_id = st.secrets.get("firestore_document", "event_notepad")
-        return FirestoreNotepadStore(db.collection(collection_name).document(document_id))
-    except (ImportError, KeyError, AttributeError) as exc:
-        logger.warning("Firestore client unavailable: %s", exc)
+        return db.collection(st.secrets.get("firestore_collection", "mynba")).document(
+            st.secrets.get("firestore_document", "event_notepad")
+        )
+    except Exception as exc:
+        logger.warning("Firestore unavailable: %s", type(exc).__name__)
         return None
-    except Exception:
-        logger.exception("Unexpected error while initializing Firestore")
-        return None
-
-
-def is_firestore_available() -> bool:
-    if "firestore_available" not in st.session_state:
-        st.session_state["firestore_available"] = get_firestore_doc_ref() is not None
-    return bool(st.session_state["firestore_available"])
 
 
 def get_storage_backend_label() -> str:
-    return "Firestore" if is_firestore_available() else "Local JSON (fallback)"
+    return st.session_state.notepad_store.backend
 
 
-def load_notepad_items():
-    doc_ref = get_firestore_doc_ref()
-    if doc_ref is not None:
-        try:
-            return doc_ref.load_items()
-        except Exception:
-            logger.exception("Failed to load notepad items from Firestore")
-
-    if not NOTEPAD_PATH.exists():
-        return []
-
+def commit_notebook(updated: dict) -> bool:
+    """Only update the visible state once the complete notebook is saved."""
     try:
-        with NOTEPAD_PATH.open("r", encoding="utf-8") as f:
-            data = json.load(f)
-        if isinstance(data, list):
-            return data
-    except json.JSONDecodeError as exc:
-        logger.warning("Could not decode local notepad JSON: %s", exc)
-    except OSError:
-        logger.exception("Failed to read local notepad file")
-    return []
+        # A second browser session may have advanced the shared notebook.
+        latest = st.session_state.notepad_store.load()
+        if latest["current_season"] != st.session_state.notebook["current_season"]:
+            st.session_state.notebook = latest
+            reset_note_editor()
+            st.session_state.confirm_next_season = False
+            st.session_state.last_event = None
+            st.session_state.selected_phase = "Coaching Carousel" if "Coaching Carousel" in phases else phases[0]
+            st.session_state.notebook_error = "The season changed in another session. Your notebook has refreshed; please try again."
+            return False
+        if latest.get("updated_at") != st.session_state.notebook.get("updated_at"):
+            st.session_state.notebook = latest
+            st.session_state.confirm_next_season = False
+            st.session_state.notebook_error = "The notes changed in another session. Your notebook has refreshed. Review your draft and save again."
+            return False
+        st.session_state.notebook = st.session_state.notepad_store.save(updated)
+        st.session_state.notebook_error = ""
+        return True
+    except NotepadStorageError as exc:
+        st.session_state.notebook_error = str(exc)
+        return False
 
 
-def save_notepad_items(items):
-    doc_ref = get_firestore_doc_ref()
-    if doc_ref is not None:
-        try:
-            doc_ref.save_items(items)
-            return
-        except Exception:
-            logger.exception("Failed to save notepad items to Firestore")
-
-    try:
-        with NOTEPAD_PATH.open("w", encoding="utf-8") as f:
-            json.dump(items, f, indent=2)
-    except OSError:
-        logger.exception("Failed to save local notepad file")
-
-
-def clear_notepad_title():
-    st.session_state.notepad_draft_item_pending = ""
-    st.session_state.notepad_draft_source_key = None
-
-
-def clear_notepad_details():
-    st.session_state.notepad_draft_details_pending = ""
-    st.session_state.notepad_draft_source_key = None
-
-
-def clear_all_notepad_draft_fields():
-    st.session_state.notepad_draft_item_pending = ""
-    st.session_state.notepad_draft_details_pending = ""
-    st.session_state.notepad_draft_due_pending = date.today()
-    st.session_state.notepad_draft_phase_pending = "Any"
-    st.session_state.notepad_draft_source_key = None
-
-
-def remove_notepad_item(item_id):
-    st.session_state.notepad_items = [
-        item for item in st.session_state.notepad_items
-        if item.get("id") != item_id
-    ]
-    save_notepad_items(st.session_state.notepad_items)
-
-
-def sync_notepad_done(item_id):
-    done_key = f"note_done_{item_id}"
-    done_value = bool(st.session_state.get(done_key, False))
-
-    for item in st.session_state.notepad_items:
-        if item.get("id") == item_id:
-            item["done"] = done_value
-            break
-
-    save_notepad_items(st.session_state.notepad_items)
-
-
-def add_notepad_item():
-    note_title = st.session_state.notepad_draft_item.strip()
-    if not note_title:
-        st.warning("Please add a title for the notepad item.")
-        return
-
-    new_item = {
-        "id": int(datetime.now().timestamp() * 1000),
-        "title": note_title,
-        "details": st.session_state.notepad_draft_details.strip(),
-        "due": st.session_state.notepad_draft_due.isoformat(),
-        "phase": st.session_state.notepad_draft_phase,
-        "done": False,
-        "created_at": datetime.now().isoformat(timespec="seconds")
+def reset_note_editor():
+    st.session_state.editing_note_id = None
+    st.session_state.note_editor_pending = {
+        "note_title": "", "note_details": "", "note_review_date": None,
+        "note_phase": "Any", "note_season": st.session_state.notebook["current_season"],
     }
-    st.session_state.notepad_items.insert(0, new_item)
-    save_notepad_items(st.session_state.notepad_items)
-    clear_all_notepad_draft_fields()
-    st.toast("Notepad item added.")
-    st.rerun()
+    st.session_state.note_editor_error = ""
 
 
-def _event_source_key(event_payload: dict) -> str:
-    return "|".join([
-        str(event_payload.get("phase", "")),
-        str(event_payload.get("title", "")),
-        str(event_payload.get("effect", "")),
-        str(event_payload.get("team", "")),
-        str(event_payload.get("player", "")),
-        str((event_payload.get("event_roll") or {}).get("value", "")),
-    ])
+def edit_note(item_id: str):
+    item = next((item for item in st.session_state.notebook["items"] if item["id"] == item_id), None)
+    if item is None:
+        return
+    try:
+        review_date = date.fromisoformat(item.get("due", "")) if item.get("due") else None
+    except ValueError:
+        review_date = None
+    st.session_state.editing_note_id = item_id
+    st.session_state.note_editor_pending = {
+        "note_title": item.get("title", ""), "note_details": item.get("details", ""),
+        "note_review_date": review_date, "note_phase": item.get("phase", "Any"),
+        "note_season": item["season"],
+    }
+    st.session_state.note_editor_error = ""
+
+
+def submit_note():
+    try:
+        season = st.session_state.note_season
+        review_date = st.session_state.note_review_date
+        updated = save_note(
+            st.session_state.notebook, title=st.session_state.note_title,
+            details=st.session_state.note_details, season=season,
+            phase=st.session_state.note_phase,
+            due=review_date.isoformat() if review_date else "",
+            note_id=st.session_state.editing_note_id,
+        )
+        editing = st.session_state.editing_note_id is not None
+        if commit_notebook(updated):
+            reset_note_editor()
+            if season > updated["current_season"]:
+                st.session_state.notebook_notice = f"Note scheduled for {season_label(season)}. It will appear when that season starts."
+            else:
+                st.session_state.notebook_notice = "Note updated." if editing else "Note saved to your season notebook."
+    except ValueError as exc:
+        st.session_state.note_editor_error = str(exc)
+
+
+def toggle_note_done(item_id: str, done: bool):
+    if commit_notebook(set_note_done(st.session_state.notebook, item_id, done)):
+        st.session_state.notebook_notice = "Note completed." if done else "Note reopened."
+
+
+def remove_notepad_item(item_id: str):
+    if commit_notebook(delete_note(st.session_state.notebook, item_id)):
+        if st.session_state.editing_note_id == item_id:
+            reset_note_editor()
+        st.session_state.notebook_notice = "Note deleted."
 
 
 def prefill_notepad_adder_for_event(event_payload: dict):
-    src_key = _event_source_key(event_payload)
-    if st.session_state.get("notepad_draft_source_key") == src_key:
-        return
-
-    team = event_payload.get("team")
-    player = event_payload.get("player")
-    target_text = " • ".join([v for v in [team, player] if v])
-
-    title = event_payload.get("title", "Generated Event")
-    effect = event_payload.get("effect", "")
-    phase = event_payload.get("phase", "Any")
-
-    st.session_state.notepad_draft_item_pending = f"Track: {title}" + (f" ({target_text})" if target_text else "")
-    st.session_state.notepad_draft_details_pending = (
-        f"Event: {title}\n"
-        f"Effect: {effect}" + (f"\nTarget: {target_text}" if target_text else "")
-    )
-    st.session_state.notepad_draft_due_pending = date.today()
-    st.session_state.notepad_draft_phase_pending = phase if phase in phases else "Any"
-    st.session_state.notepad_draft_source_key = src_key
+    # Filling a form is explicit so another event draw never overwrites a draft.
+    targets = [str(event_payload[key]) for key in ("team", "team_2", "player") if event_payload.get(key)]
+    st.session_state.editing_note_id = None
+    st.session_state.note_editor_pending = {
+        "note_title": event_payload.get("title", "Generated event"),
+        "note_details": event_payload.get("effect", "") + ("\n\n" + " · ".join(targets) if targets else ""),
+        "note_review_date": None,
+        "note_phase": event_payload.get("phase", "Any"),
+        "note_season": st.session_state.notebook["current_season"],
+    }
+    st.session_state.note_editor_error = ""
 
 
 def set_selected_phase(phase_name: str):
     st.session_state.selected_phase = phase_name
+    st.session_state.confirm_next_season = False
 
 
-def handle_clear_title():
-    clear_notepad_title()
-    st.rerun()
+def start_next_season():
+    if st.session_state.selected_phase != "Playoffs" or not st.session_state.confirm_next_season:
+        return
+    previous = st.session_state.notebook["current_season"]
+    if commit_notebook(advance_season(st.session_state.notebook)):
+        reset_note_editor()
+        st.session_state.last_event = None
+        st.session_state.confirm_next_season = False
+        st.session_state.selected_phase = "Coaching Carousel" if "Coaching Carousel" in phases else phases[0]
+        st.session_state.notebook_notice = f"Welcome to {season_label(previous + 1)}. Last season’s notes have been deleted and this season’s notes are now available."
 
 
-def handle_clear_details():
-    clear_notepad_details()
-    st.rerun()
+def render_season_controls():
+    notebook = st.session_state.notebook
+    current = notebook["current_season"]
+    open_count = sum(not item.get("done") for item in active_notes(notebook))
+    html(f'<div class="season-banner"><div><span class="eyebrow">YOUR FRANCHISE TIMELINE</span>'
+         f'<h2>{escape(season_label(current))}</h2></div><span class="season-open">{open_count} open notes</span></div>')
+    if st.session_state.selected_phase == "Playoffs":
+        if not st.session_state.confirm_next_season:
+            st.button("Finish Playoffs · Start next season →", key="prepare_next_season", use_container_width=True,
+                      on_click=lambda: st.session_state.update(confirm_next_season=True))
+        else:
+            expired = sum(item["season"] == current for item in notebook["items"])
+            arriving = sum(item["season"] == current + 1 for item in notebook["items"])
+            st.warning(f"Start {season_label(current + 1)}? This permanently deletes {expired} notes assigned to {season_label(current)} and reveals {arriving} scheduled notes.")
+            confirm, cancel = st.columns(2)
+            with confirm:
+                st.button("Start next season", key="confirm_next_season_button", type="primary", use_container_width=True, on_click=start_next_season)
+            with cancel:
+                st.button("Stay in this season", use_container_width=True,
+                          on_click=lambda: st.session_state.update(confirm_next_season=False))
+    else:
+        st.caption("Advance your season after the Playoffs. Scheduled notes appear when their season begins.")
 
 
-def handle_add_notepad_item():
-    add_notepad_item()
+def render_notepad_editor():
+    if "note_editor_pending" in st.session_state:
+        for key, value in st.session_state.pop("note_editor_pending").items():
+            st.session_state[key] = value
+    editing = st.session_state.editing_note_id is not None
+    section_heading("02", "Edit your note" if editing else "A place for the next chapter",
+                    "Make a change, then save it to your notebook." if editing else "Capture a storyline now. Choose when it matters.", panel=True, anchor="note-editor")
+    if st.session_state.note_editor_error:
+        st.error(st.session_state.note_editor_error)
+    current = st.session_state.notebook["current_season"]
+    season_options = list(range(current, current + 21))
+    selected = st.session_state.get("note_season", current)
+    if selected not in season_options:
+        season_options.append(selected)
+    if st.session_state.get("note_phase") not in ["Any"] + phases:
+        st.session_state.note_phase = "Any"
+    with st.form("note_editor", border=False):
+        st.text_input("Note title", key="note_title", placeholder="e.g. Give the rookie a bigger role")
+        st.text_area("Details", key="note_details", placeholder="The change, the player, the follow-up…", height=130)
+        st.selectbox("Show this note in", season_options, key="note_season",
+                     format_func=lambda season: season_label(season) + (" · current" if season == current else ""),
+                     help="Future notes stay hidden until their season starts. Every note is deleted when its assigned season ends.")
+        with st.expander("Phase & review date · optional"):
+            st.selectbox("Related phase", ["Any"] + phases, key="note_phase")
+            st.date_input("Review date", value=None, key="note_review_date", help="Optional reminder date. Seasons advance manually, independently of the calendar.")
+        st.form_submit_button("Save changes" if editing else "Save note", type="primary", use_container_width=True, on_click=submit_note)
+    st.button("Cancel editing" if editing else "Clear draft", key="reset_note_editor", use_container_width=True, on_click=reset_note_editor)
+    if st.session_state.last_event and not editing:
+        st.button("Use latest event", key="use_event_in_note", use_container_width=True,
+                  on_click=prefill_notepad_adder_for_event, args=(st.session_state.last_event,))
 
 
 def render_notepad_items_panel():
-    section_heading("02", "Your season, on record", "Keep track of the changes that need a follow-up.")
-    total = len(st.session_state.notepad_items)
-    done = sum(bool(item.get("done")) for item in st.session_state.notepad_items)
-    html(f'<div class="notepad-summary"><span><strong>{total - done}</strong> Open</span>'
-         f'<span><strong>{done}</strong> Completed</span><span><strong>{total}</strong> Total notes</span></div>')
-
-    show_open_only = st.toggle("Show open only", value=True, key="notepad_open_only")
-
-    visible_items = [
-        n for n in st.session_state.notepad_items
-        if (not show_open_only) or (not n.get("done", False))
-    ]
-
-    if not visible_items:
-        empty_state(
-            "All caught up" if total else "Every storyline starts somewhere",
-            "Turn off the open-only filter to see your completed notes." if total else
-            "Add a follow-up from the Event Generator. Your season notes will be waiting here.",
-        )
-    else:
-        for item in visible_items:
-            iid = item.get("id")
-            done_key = f"note_done_{iid}"
-
-            with st.container(border=True):
-                cols = st.columns([0.09, 0.73, 0.18])
-                with cols[0]:
-                    st.checkbox(
-                        "Done",
-                        value=item.get("done", False),
-                        key=done_key,
-                        label_visibility="collapsed",
-                        on_change=sync_notepad_done,
-                        args=(iid,)
-                    )
-                with cols[1]:
-                    due_txt = item.get("due", "")
-                    phase_txt = item.get("phase", "Any")
-                    title_class = "note-title done" if item.get("done") else "note-title"
-                    meta_line = f"Review {due_txt}"
-                    if phase_txt and phase_txt != "Any":
-                        meta_line += f" · {phase_txt}"
-                    html(f'<p class="{title_class}">{escape(str(item.get("title", "")))}</p>'
-                         f'<p class="note-meta">{escape(meta_line)}</p>')
-                    if item.get("details"):
-                        html(f'<p class="note-details">{escape(str(item["details"]))}</p>')
-                with cols[2]:
-                    st.button("Remove", key=f"note_remove_{iid}", use_container_width=True, on_click=remove_notepad_item, args=(iid,))
-
-
-def render_notepad_adder():
-    section_heading("02", "Keep the story going", "Save a follow-up to your event notepad.", panel=True)
-    html('<div class="composer-tip">Generated events fill in the details for you. Add a review date to keep temporary changes on your radar.</div>')
-
-    if "notepad_draft_item_pending" in st.session_state:
-        st.session_state.notepad_draft_item = st.session_state.pop("notepad_draft_item_pending")
-    if "notepad_draft_details_pending" in st.session_state:
-        st.session_state.notepad_draft_details = st.session_state.pop("notepad_draft_details_pending")
-    if "notepad_draft_due_pending" in st.session_state:
-        st.session_state.notepad_draft_due = st.session_state.pop("notepad_draft_due_pending")
-    if "notepad_draft_phase_pending" in st.session_state:
-        st.session_state.notepad_draft_phase = st.session_state.pop("notepad_draft_phase_pending")
-
-    if st.session_state.get("notepad_draft_phase") not in (["Any"] + phases):
-        st.session_state.notepad_draft_phase = "Any"
-
-    st.text_input("Note title", key="notepad_draft_item", placeholder="e.g. Review the starting rotation")
-    st.text_area("Details", key="notepad_draft_details", placeholder="What changed? What needs a follow-up?", height=145)
-    st.date_input("Review date", key="notepad_draft_due")
-    st.selectbox("Related phase", ["Any"] + phases, key="notepad_draft_phase")
-    st.button("Add to Notepad", key="add_notepad_item", use_container_width=True, type="primary", on_click=handle_add_notepad_item)
-    clear_cols = st.columns(2)
-    with clear_cols[0]:
-        st.button("Clear title", key="clear_title", use_container_width=True, on_click=handle_clear_title)
-    with clear_cols[1]:
-        st.button("Clear details", key="clear_details", use_container_width=True, on_click=handle_clear_details)
+    notebook = st.session_state.notebook
+    notes = active_notes(notebook)
+    completed = sum(bool(item.get("done")) for item in notes)
+    future_count = len(scheduled_notes(notebook))
+    section_heading("01", "The season notebook", "Your active storylines, with room for what comes next.")
+    html('<a class="note-editor-link" href="#note-editor">Jump to note editor ↗</a>')
+    html(f'<div class="notebook-stats"><div><strong>{len(notes) - completed}</strong><span>Open storylines</span></div>'
+         f'<div><strong>{completed}</strong><span>Completed</span></div>'
+         f'<div><strong>{future_count}</strong><span>Scheduled for later</span></div></div>')
+    filter_cols = st.columns([1.2, 1])
+    with filter_cols[0]:
+        query = st.text_input("Search season notes", key="note_search", placeholder="Find a player, team, or storyline…")
+    with filter_cols[1]:
+        status = st.selectbox("Show", ["Open notes", "All active notes", "Completed"], key="note_status")
+    term = query.strip().lower()
+    visible = [item for item in notes if
+               (status != "Open notes" or not item.get("done")) and
+               (status != "Completed" or item.get("done")) and
+               (not term or term in (str(item.get("title", "")) + " " + str(item.get("details", ""))).lower())]
+    if not visible:
+        if term or status == "Completed":
+            empty_state("No notes match this view", "Try another search or change the status filter.", compact=True)
+        elif notes:
+            empty_state("Everything is taken care of", "Your completed storylines are still here. Choose All active notes to revisit them.")
+        else:
+            empty_state("A fresh page for your season", "Add your first note here, or bring an event into the notebook with Use latest event.")
+    for item in visible:
+        with st.container(border=True):
+            render_note_card(item)
+            actions = st.columns([1.3, 1, 1])
+            with actions[0]:
+                st.button("Reopen" if item.get("done") else "Mark complete", key=f"done_{item['id']}", use_container_width=True,
+                          on_click=toggle_note_done, args=(item["id"], not item.get("done", False)))
+            with actions[1]:
+                st.button("Edit", key=f"edit_{item['id']}", use_container_width=True, on_click=edit_note, args=(item["id"],))
+            with actions[2]:
+                st.button("Delete", key=f"delete_{item['id']}", use_container_width=True, on_click=remove_notepad_item, args=(item["id"],))
+    if future_count:
+        st.caption(f"{future_count} scheduled notes are tucked away. They will appear automatically when their assigned season starts.")
 
 
 def roll_event_for_phase(phase_name: str):
@@ -385,7 +323,6 @@ def roll_event_for_phase(phase_name: str):
         "intensity": intensity,
         "event_roll": event_roll
     }
-    prefill_notepad_adder_for_event(st.session_state.last_event)
     st.toast("🏀 New event generated!", icon="🎲")
 
 # -----------------------------
@@ -400,23 +337,23 @@ if "event_weights" not in st.session_state:
 if "locked_team" not in st.session_state:
     st.session_state.locked_team = None
 
-if "notepad_items" not in st.session_state:
-    st.session_state.notepad_items = load_notepad_items()
+if "notebook" not in st.session_state:
+    st.session_state.notepad_store = NotepadStore(NOTEPAD_PATH, get_firestore_doc_ref(), initial_season=2026)
+    try:
+        st.session_state.notebook = st.session_state.notepad_store.load()
+    except NotepadStorageError as exc:
+        st.error(str(exc))
+        st.stop()
 
-if "notepad_draft_item" not in st.session_state:
-    st.session_state.notepad_draft_item = ""
+for state_key, default in {
+    "editing_note_id": None, "note_editor_error": "", "notebook_error": "",
+    "notebook_notice": "", "confirm_next_season": False, "workspace": "Event Generator",
+}.items():
+    if state_key not in st.session_state:
+        st.session_state[state_key] = default
 
-if "notepad_draft_details" not in st.session_state:
-    st.session_state.notepad_draft_details = ""
-
-if "notepad_draft_due" not in st.session_state:
-    st.session_state.notepad_draft_due = date.today()
-
-if "notepad_draft_phase" not in st.session_state:
-    st.session_state.notepad_draft_phase = "Any"
-
-if "notepad_draft_source_key" not in st.session_state:
-    st.session_state.notepad_draft_source_key = None
+if "note_title" not in st.session_state and "note_editor_pending" not in st.session_state:
+    reset_note_editor()
 
 if "selected_phase" not in st.session_state:
     st.session_state.selected_phase = phases[0]
@@ -425,7 +362,7 @@ if "selected_phase" not in st.session_state:
 # Visual theme and header
 # -----------------------------
 apply_theme()
-render_header(sum(len(events) for events in EVENTS.values()), len(phases))
+render_header(sum(len(events) for events in EVENTS.values()), len(phases), show_hero=st.session_state.workspace == "Event Generator")
 
 # -----------------------------
 # Weight controls
@@ -479,34 +416,38 @@ with st.sidebar:
     st.markdown("---")
     html(f'<div class="storage-label">Storage · {escape(get_storage_backend_label())}</div>')
 
-app_tabs = st.tabs(["Event Generator", "Notepad"])
+st.radio("Workspace", ["Event Generator", "Notepad"], horizontal=True, key="workspace", label_visibility="collapsed")
+render_season_controls()
+if st.session_state.notebook_error:
+    st.error(st.session_state.notebook_error)
+if st.session_state.notebook_notice:
+    st.success(st.session_state.pop("notebook_notice"))
 
-with app_tabs[0]:
+if st.session_state.workspace == "Event Generator":
     generator_col, notepad_col = st.columns([1.8, 1], gap="large")
     with generator_col:
         with st.container(border=True):
             section_heading("01", "Set the scene", "Choose where you are in your season.", panel=True)
-            row_size = (len(phases) + 1) // 2
-            for row_idx in range(2):
-                cols = st.columns(row_size)
-                for col_idx in range(row_size):
-                    phase_idx = row_idx * row_size + col_idx
-                    with cols[col_idx]:
-                        if phase_idx < len(phases):
-                            phase_name = phases[phase_idx]
-                            is_selected = st.session_state.selected_phase == phase_name
-                            phase_label = PHASE_BUTTON_LABELS.get(phase_name) or phase_name
-                            st.button(
-                                phase_label,
-                                key=f"phase_btn_{phase_name}",
-                                help=phase_name,
-                                use_container_width=True,
-                                type="primary" if is_selected else "secondary",
-                                on_click=set_selected_phase,
-                                args=(phase_name,)
-                            )
-                        else:
-                            st.markdown("")
+            playoffs_index = phases.index("Playoffs")
+            phase_rows = [
+                phases[:playoffs_index],
+                ["Playoffs"],
+                phases[playoffs_index + 1:],
+            ]
+            for phase_row in phase_rows:
+                if not phase_row:
+                    continue
+                for col, phase_name in zip(st.columns(len(phase_row)), phase_row):
+                    with col:
+                        st.button(
+                            PHASE_BUTTON_LABELS.get(phase_name) or phase_name,
+                            key=f"phase_btn_{phase_name}",
+                            help=phase_name,
+                            use_container_width=True,
+                            type="primary" if st.session_state.selected_phase == phase_name else "secondary",
+                            on_click=set_selected_phase,
+                            args=(phase_name,)
+                        )
 
             selected_phase = st.session_state.selected_phase
             phase_events = EVENTS[selected_phase]
@@ -548,9 +489,14 @@ with app_tabs[0]:
 
     with notepad_col:
         with st.container(border=True):
-            render_notepad_adder()
+            render_notepad_editor()
 
-with app_tabs[1]:
-    render_notepad_items_panel()
+else:
+    notes_col, editor_col = st.columns([1.8, 1], gap="large")
+    with notes_col:
+        render_notepad_items_panel()
+    with editor_col:
+        with st.container(border=True):
+            render_notepad_editor()
 
 html('<footer class="app-footer"><span>MyNBA / The Front Office</span><span>A little unpredictability. A more memorable league.</span></footer>')

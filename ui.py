@@ -2,6 +2,9 @@
 
 from html import escape
 from pathlib import Path
+from datetime import date
+
+from season_notebook import season_label
 
 import streamlit as st
 
@@ -19,12 +22,16 @@ def basketball_icon() -> str:
     return '<svg viewBox="0 0 32 32" fill="none" aria-hidden="true"><circle cx="16" cy="16" r="12"/><path d="M4 16h24M16 4v24M7.5 7.5c11 5 11 12 17 17M24.5 7.5c-11 5-11 12-17 17"/></svg>'
 
 
-def render_header(scenario_count: int, phase_count: int) -> None:
+def render_header(scenario_count: int, phase_count: int, *, show_hero: bool = True) -> None:
     html(f"""
 <div class="masthead">
   <div class="brand"><span class="brand-icon">{basketball_icon()}</span><span>MyNBA<span class="brand-divider">/</span><span class="brand-subtitle">The Front Office</span></span></div>
   <span class="edition"><span class="status-dot"></span> YOUR LEAGUE. YOUR STORY.</span>
 </div>
+""")
+    if not show_hero:
+        return
+    html(f"""
 <div class="hero">
   <div class="hero-copy">
     <div class="eyebrow">THE MYNBA STORYTELLING COMPANION</div>
@@ -50,9 +57,10 @@ def render_header(scenario_count: int, phase_count: int) -> None:
 """)
 
 
-def section_heading(number: str, title: str, subtitle: str = "", *, panel: bool = False) -> None:
+def section_heading(number: str, title: str, subtitle: str = "", *, panel: bool = False, anchor: str = "") -> None:
     style = "section-heading panel-heading" if panel else "section-heading"
-    html(f'<div class="{style}"><span class="step-number">{escape(number)}</span>'
+    anchor_attribute = f' id="{escape(anchor, quote=True)}"' if anchor else ""
+    html(f'<div class="{style}"{anchor_attribute}><span class="step-number">{escape(number)}</span>'
          f'<div><h2>{escape(title)}</h2>'
          f'<p>{escape(subtitle)}</p></div></div>')
 
@@ -97,3 +105,25 @@ def render_weight_distribution(weights: dict) -> None:
     html(f'<div class="weight-bar" aria-hidden="true">{segments}</div>'
          '<div class="weight-legend"><span><i class="weight-low"></i>Low</span>'
          '<span><i class="weight-medium"></i>Medium</span><span><i class="weight-high"></i>High</span></div>')
+
+
+def render_note_card(item: dict) -> None:
+    done = bool(item.get("done"))
+    kind = "complete" if done else "active"
+    status = "Completed" if done else "Open storyline"
+    phase = item.get("phase", "Any")
+    tags = f'<span class="note-tag">{escape(season_label(item["season"]))}</span>'
+    if phase and phase != "Any":
+        tags += f'<span class="note-tag">{escape(str(phase))}</span>'
+    if item.get("due"):
+        try:
+            review = date.fromisoformat(item["due"]).strftime("%d %b %Y")
+        except (ValueError, TypeError):
+            review = str(item["due"])
+        tags += f'<span class="note-tag review">Review {escape(review)}</span>'
+    details = escape(str(item.get("details", "")))
+    html(f'<article class="story-note {kind}"><div class="story-note-top">'
+         f'<span class="note-status"><i></i>{status}</span></div>'
+         f'<h3>{escape(str(item.get("title", "")))}</h3>'
+         + (f'<p class="story-note-details">{details}</p>' if details else "")
+         + f'<div class="note-tags">{tags}</div></article>')
