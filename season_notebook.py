@@ -54,7 +54,8 @@ def scheduled_notes(notebook: dict) -> list[dict]:
 
 
 def save_note(notebook: dict, *, title: str, details: str = "", season: int,
-              phase: str = "Any", due: str = "", note_id: str | None = None) -> dict:
+              phase: str = "Any", due: str = "", note_id: str | None = None,
+              source_event_id: str | None = None, resolve_before_rollover: bool = False) -> dict:
     title = title.strip()
     if not title:
         raise ValueError("Give your note a title before saving.")
@@ -69,7 +70,9 @@ def save_note(notebook: dict, *, title: str, details: str = "", season: int,
         raise ValueError("This note no longer exists. Refresh the notebook.")
     stamp = datetime.now(timezone.utc).isoformat()
     values = {"title": title, "details": details.strip(), "season": season,
-              "phase": phase, "due": due, "updated_at": stamp}
+              "phase": phase, "due": due, "updated_at": stamp,
+              "source_event_id": source_event_id,
+              "resolve_before_rollover": bool(resolve_before_rollover)}
     if existing is not None:
         existing.update(values)
     else:

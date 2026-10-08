@@ -12,9 +12,12 @@ from season_notebook import (
 )
 from notepad_store import NotepadStore, NotepadStorageError
 from event_engine import (
+    build_event_note,
     generate_event_number,
     get_event_intensity,
     load_events,
+    requires_player_draw,
+    requires_team_draw,
     weighted_random_event,
 )
 from ui import (
@@ -115,6 +118,7 @@ def reset_note_editor():
     st.session_state.note_editor_pending = {
         "note_title": "", "note_details": "", "note_review_date": None,
         "note_phase": "Any", "note_season": st.session_state.notebook["current_season"],
+        "note_source_event_id": None, "note_resolve_before_rollover": False,
     }
     st.session_state.note_editor_error = ""
 
@@ -132,6 +136,8 @@ def edit_note(item_id: str):
         "note_title": item.get("title", ""), "note_details": item.get("details", ""),
         "note_review_date": review_date, "note_phase": item.get("phase", "Any"),
         "note_season": item["season"],
+        "note_source_event_id": item.get("source_event_id"),
+        "note_resolve_before_rollover": bool(item.get("resolve_before_rollover", False)),
     }
     st.session_state.note_editor_error = ""
 
@@ -146,6 +152,8 @@ def submit_note():
             phase=st.session_state.note_phase,
             due=review_date.isoformat() if review_date else "",
             note_id=st.session_state.editing_note_id,
+            source_event_id=st.session_state.note_source_event_id,
+            resolve_before_rollover=st.session_state.note_resolve_before_rollover,
         )
         editing = st.session_state.editing_note_id is not None
         if commit_notebook(updated):
@@ -172,14 +180,16 @@ def remove_notepad_item(item_id: str):
 
 def prefill_notepad_adder_for_event(event_payload: dict):
     # Filling a form is explicit so another event draw never overwrites a draft.
-    targets = [str(event_payload[key]) for key in ("team", "team_2", "player") if event_payload.get(key)]
+    draft = build_event_note(event_payload, st.session_state.notebook["current_season"])
     st.session_state.editing_note_id = None
     st.session_state.note_editor_pending = {
-        "note_title": event_payload.get("title", "Generated event"),
-        "note_details": event_payload.get("effect", "") + ("\n\n" + " · ".join(targets) if targets else ""),
+        "note_title": draft["title"],
+        "note_details": draft["details"],
         "note_review_date": None,
-        "note_phase": event_payload.get("phase", "Any"),
-        "note_season": st.session_state.notebook["current_season"],
+        "note_phase": draft["phase"],
+        "note_season": draft["season"],
+        "note_source_event_id": draft["source_event_id"],
+        "note_resolve_before_rollover": draft["resolve_before_rollover"],
     }
     st.session_state.note_editor_error = ""
 
@@ -215,6 +225,12 @@ def render_season_controls():
             expired = sum(item["season"] == current for item in notebook["items"])
             arriving = sum(item["season"] == current + 1 for item in notebook["items"])
             st.warning(f"Start {season_label(current + 1)}? This permanently deletes {expired} notes assigned to {season_label(current)} and reveals {arriving} scheduled notes.")
+            pending = [item for item in notebook["items"] if item["season"] == current
+                       and not item.get("done") and item.get("resolve_before_rollover")]
+            if pending:
+                st.info("Before continuing, restore any expired event changes and move still-active follow-ups to the next season. This app does not edit your NBA 2K save.")
+                for item in pending:
+                    st.write("• " + item.get("title", "Untitled follow-up"))
             confirm, cancel = st.columns(2)
             with confirm:
                 st.button("Start next season", key="confirm_next_season_button", type="primary", use_container_width=True, on_click=start_next_season)
@@ -250,6 +266,7 @@ def render_notepad_editor():
         with st.expander("Phase & review date · optional"):
             st.selectbox("Related phase", ["Any"] + phases, key="note_phase")
             st.date_input("Review date", value=None, key="note_review_date", help="Optional reminder date. Seasons advance manually, independently of the calendar.")
+            st.checkbox("Remind me before season rollover", key="note_resolve_before_rollover")
         st.form_submit_button("Save changes" if editing else "Save note", type="primary", use_container_width=True, on_click=submit_note)
     st.button("Cancel editing" if editing else "Clear draft", key="reset_note_editor", use_container_width=True, on_click=reset_note_editor)
     if st.session_state.last_event and not editing:
@@ -299,8 +316,38 @@ def render_notepad_items_panel():
         st.caption(f"{future_count} scheduled notes are tucked away. They will appear automatically when their assigned season starts.")
 
 
+def render_event_review():
+    flagged = [(phase, event) for phase, events in EVENTS.items() for event in events if event.get("needs_review")]
+    section_heading("01", "Events for your review", f"{len(flagged)} scenarios need your judgment before they are ready for normal draws.")
+    st.caption("Edit the event in events.json after making your decision, then set needs_review to false and remove the resolved review_notes. The suggested alternative is a proposal, not an instruction to apply.")
+    filters = st.columns([1, 2])
+    with filters[0]:
+        phase_filter = st.selectbox("Review phase", ["All phases"] + phases, key="review_phase")
+    with filters[1]:
+        query = st.text_input("Find an event to review", key="review_search", placeholder="Search titles, instructions, or review questions…").strip().lower()
+    matches = [(phase, event) for phase, event in flagged if
+               (phase_filter == "All phases" or phase == phase_filter) and
+               (not query or query in (event["title"] + " " + event["effect"] + " " + " ".join(event["review_notes"])).lower())]
+    st.caption(f"{len(matches)} events in this view")
+    for phase, event in matches:
+        with st.expander(f"{phase} · {event['title']}"):
+            st.write(event["effect"])
+            st.caption(f"Impact: {event['impact']} · Duration: {event['duration']}")
+            for note in event["review_notes"]:
+                st.warning(note)
+            if event.get("review_suggestion"):
+                st.info("Suggested alternative: " + event["review_suggestion"])
+            if event.get("original_effect") and event["original_effect"] != event["effect"]:
+                st.caption("Original wording")
+                st.write(event["original_effect"])
+            st.code(event["id"], language=None)
+    if not matches:
+        empty_state("No flagged events in this view", "Try another phase or search term.", compact=True)
+
+
 def roll_event_for_phase(phase_name: str):
-    recent_titles = set()
+    history = st.session_state.setdefault("recent_event_history", {})
+    recent_titles = set(history.get(phase_name, []))
     event = weighted_random_event(
         EVENTS[phase_name],
         st.session_state.event_weights,
@@ -309,20 +356,22 @@ def roll_event_for_phase(phase_name: str):
 
     effect_text = event.get("effect", "")
     locked_team = st.session_state.get("locked_team")
-    team = locked_team if locked_team else random.choice(TEAMS)
-    player_number = random.randint(1, 15)
+    team = (locked_team if locked_team else random.choice(TEAMS)) if requires_team_draw(event) else None
+    player_number = random.randint(1, 15) if requires_player_draw(event) else None
     intensity = get_event_intensity(event)
     event_roll = generate_event_number(event)
 
     st.session_state.last_event = {
+        **event,
         "phase": phase_name,
         "title": event["title"],
         "effect": effect_text,
         "team": team,
-        "player": f"#{player_number} (Highest Overall)",
+        "player": f"#{player_number} (rank by overall)" if player_number is not None else None,
         "intensity": intensity,
         "event_roll": event_roll
     }
+    history[phase_name] = (history.get(phase_name, []) + [event.get("id", event["title"])])[-5:]
     st.toast("🏀 New event generated!", icon="🎲")
 
 # -----------------------------
@@ -348,6 +397,7 @@ if "notebook" not in st.session_state:
 for state_key, default in {
     "editing_note_id": None, "note_editor_error": "", "notebook_error": "",
     "notebook_notice": "", "confirm_next_season": False, "workspace": "Event Generator",
+    "note_source_event_id": None, "note_resolve_before_rollover": False,
 }.items():
     if state_key not in st.session_state:
         st.session_state[state_key] = default
@@ -370,7 +420,7 @@ render_header(sum(len(events) for events in EVENTS.values()), len(phases), show_
 with st.sidebar:
     html('<div class="sidebar-brand">League settings</div><div class="sidebar-kicker">SET THE TONE FOR YOUR SEASON</div>')
     st.markdown("### Event intensity")
-    st.caption("Adjust how often each impact tier appears.")
+    st.caption("Choose the probability split between available impact tiers. Each tier’s share is independent of its number of events.")
 
     low_w = st.slider("Low Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Low Impact"], step=5)
     med_w = st.slider("Medium Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Medium Impact"], step=5)
@@ -416,7 +466,7 @@ with st.sidebar:
     st.markdown("---")
     html(f'<div class="storage-label">Storage · {escape(get_storage_backend_label())}</div>')
 
-st.radio("Workspace", ["Event Generator", "Notepad"], horizontal=True, key="workspace", label_visibility="collapsed")
+st.radio("Workspace", ["Event Generator", "Notepad", "Event Review"], horizontal=True, key="workspace", label_visibility="collapsed")
 render_season_controls()
 if st.session_state.notebook_error:
     st.error(st.session_state.notebook_error)
@@ -451,6 +501,9 @@ if st.session_state.workspace == "Event Generator":
 
             selected_phase = st.session_state.selected_phase
             phase_events = EVENTS[selected_phase]
+            include_review = st.toggle("Include events needing review", value=False, key="include_review_events",
+                                       help="Unresolved events are excluded by default. Browse them in Event Review; enabling this includes their original uncertainties in draws.")
+            eligible_events = [event for event in phase_events if include_review or not event.get("needs_review")]
             filter_key = f"filter_{selected_phase}"
             st.text_input(
                 "Filter events in this phase",
@@ -461,14 +514,23 @@ if st.session_state.workspace == "Event Generator":
 
             if search_term:
                 filtered_events = [
-                    ev for ev in phase_events
+                    ev for ev in eligible_events
                     if search_term in ev.get("title", "").lower() or search_term in ev.get("effect", "").lower()
                 ]
             else:
-                filtered_events = phase_events
+                filtered_events = eligible_events
 
             html(f'<div class="phase-summary"><strong>{escape(selected_phase)}</strong>'
                  f'<span><b>{len(filtered_events)}</b> / {len(phase_events)} scenarios available</span></div>')
+            available_tiers = {get_event_intensity(event) for event in filtered_events}
+            if available_tiers:
+                total = sum(st.session_state.event_weights[tier] for tier in available_tiers)
+                if total:
+                    split = " · ".join(f"{tier.replace(' Impact', '')} {st.session_state.event_weights[tier] / total:.0%}"
+                                       for tier in DEFAULT_EVENT_WEIGHTS if tier in available_tiers)
+                    st.caption("This pool: " + split)
+                else:
+                    st.caption("All tiers present in this pool have zero weight. The next draw will use equal event probabilities.")
 
             if st.button("Generate Event ↗", key=f"gen_{selected_phase}", type="primary", use_container_width=True):
                 with st.spinner("Rolling the dice..."):
@@ -479,7 +541,7 @@ if st.session_state.workspace == "Event Generator":
                     roll_event_for_phase(selected_phase)
                     EVENTS[selected_phase] = original_events
                 else:
-                    st.warning("No events match this filter. Clear or adjust the filter.")
+                    st.warning("No events match this filter. Clear the search or check Event Review for flagged scenarios.")
             html('<p class="draw-hint">One draw. A new direction for your season.</p>')
 
         if st.session_state.last_event:
@@ -491,12 +553,15 @@ if st.session_state.workspace == "Event Generator":
         with st.container(border=True):
             render_notepad_editor()
 
-else:
+elif st.session_state.workspace == "Notepad":
     notes_col, editor_col = st.columns([1.8, 1], gap="large")
     with notes_col:
         render_notepad_items_panel()
     with editor_col:
         with st.container(border=True):
             render_notepad_editor()
+
+else:
+    render_event_review()
 
 html('<footer class="app-footer"><span>MyNBA / The Front Office</span><span>A little unpredictability. A more memorable league.</span></footer>')

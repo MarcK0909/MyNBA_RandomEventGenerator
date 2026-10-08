@@ -150,7 +150,10 @@
 .app-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .5rem; margin-top: 2rem; padding-top: 1rem; border-top: 1px solid var(--line); color: #8b99a9; font-size: .6rem; letter-spacing: .015em; }
 
 /* A persistent workspace switch keeps the notebook open through edits. */
-[role="radiogroup"][aria-label="Workspace"] { gap: .5rem; padding: .35rem; border: 1px solid var(--line); border-radius: 12px; width: fit-content; background: var(--surface); }
+[role="radiogroup"][aria-label="Workspace"] { gap: .5rem; padding: .35rem; border: 1px solid var(--line); border-radius: 12px; width: fit-content; max-width: 100%; flex-wrap: wrap; background: var(--surface); }
+.event-guidance { display: grid; grid-template-columns: auto 1fr; gap: .7rem 1rem; padding: 1rem; margin-top: .75rem; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: .75rem; }
+.event-guidance strong { color: var(--accent); font-weight: 550; }
+.event-guidance span { color: #bcc8d6; overflow-wrap: anywhere; }
 [role="radiogroup"][aria-label="Workspace"] label { margin: 0; padding: .6rem 1.2rem; border-radius: 8px; }
 [role="radiogroup"][aria-label="Workspace"] label:has(input:checked) { background: #fb923c18; color: var(--accent); }
 [role="radiogroup"][aria-label="Workspace"] label > div:first-child { display: none; }

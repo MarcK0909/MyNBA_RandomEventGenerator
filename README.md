@@ -13,12 +13,14 @@ Generate realistic season events, track follow-up notes, and keep everything org
 - Impact-colored event cards, team/player context, and automatic number-draw displays
 - Season-scoped note cards with search, editing, completion, and optional review dates
 - Current and future-season notes, with a confirmed rollover after the Playoffs
-- Persistent navigation between the event generator and the notepad
+- Persistent navigation between the event generator, notepad, and Event Review
 - Grouped phase selector with a full-width Playoffs button and an offseason row
 - Weighted event intensity controls with a default `50 / 30 / 20` split
 - Anti-repeat logic to reduce duplicate recent events
 - Automatic number draws for events that include a range prompt
 - Conditional team and player context when an event needs it
+- Explicit event durations, eligible targets, and restoration instructions
+- Flagged scenarios with review questions, original wording, and proposed alternatives
 - Persistent notepad backed by Firestore, with local JSON fallback
 - Sidebar backend status indicator for quick troubleshooting
 
@@ -36,6 +38,9 @@ Generate realistic season events, track follow-up notes, and keep everything org
 - `season_notebook.py` — note creation, editing, visibility, and season rollover
 - `notepad_store.py` — Firestore persistence and atomic local notebook storage
 - `events.json` — event database by MyNBA phase
+- `docs/EVENT_REVIEW.md` — checklist of events awaiting your decision
+- `scripts/export_event_review.py` — regenerate the checklist from event flags
+- `RULES.md` — draw frequency, eligibility, durations, and follow-up rules
 - `.gitignore` — Python, Streamlit, and macOS ignores
 
 ---
@@ -83,6 +88,22 @@ Compare the [original layout](docs/ui-before.png) with the [first design refresh
 5. Choose **Use latest event** to fill a note, or write one yourself. New event draws leave your draft intact.
 6. Open **Notepad** to create, edit, search, complete, reopen, or delete your notes.
 
+The default impact weights give Low, Medium, and High tiers a **50% / 30% / 20%** chance when all three are available. A tier's number of events does not change its total chance. Missing or disabled tiers redistribute their share among the remaining enabled tiers; the generator shows the effective split for your current search. Recent draws receive a smaller chance within their tier. If every available tier has zero weight, events are drawn with equal probability.
+
+### Review unclear events
+
+Open **Event Review** to filter unresolved scenarios by phase or search their instructions and questions. Normal draws exclude these events; **Include events needing review** opts them into the pool and displays their questions when drawn.
+
+The [review checklist](docs/EVENT_REVIEW.md) contains the same flagged events. Decide each event's target, action, amount, duration, and follow-up, then edit its entry in `events.json`. Set `needs_review` to `false` and remove the resolved `review_notes`. Update its impact, target, duration, tracking, and roll fields to match your decision. Keep the `id` stable. Checking a Markdown box alone does not approve an event in the app.
+
+Refresh the app after saving your edits, then regenerate the checklist:
+
+```bash
+python3.11 scripts/export_event_review.py
+```
+
+The script replaces the checklist, so keep final decisions in `events.json`.
+
 ## Seasons and the Notepad
 
 See the [season notebook preview](docs/ui-notebook.png).
@@ -94,6 +115,8 @@ See the [season notebook preview](docs/ui-notebook.png).
 - Advancing permanently deletes all notes assigned to the departing season, including completed notes. Notes scheduled for the new season become visible; later notes stay stored and hidden. Merely selecting another phase never advances the season.
 - For example, moving from **2026–27** to **2027–28** deletes the 2026–27 notes, reveals the 2027–28 notes, and keeps 2028–29 notes hidden.
 - A review date is optional and does not control season progression. You advance the season manually when your MyNBA playoffs are finished.
+- **Use latest event** includes the actual roll, target, duration, and follow-up in your draft. Events with a next-season follow-up preselect that future season. Saving the draft is still required.
+- Notes marked **Remind me before season rollover** appear in the rollover confirmation while unfinished. Handle retirements and restore expired temporary changes before advancing. Move any still-active follow-up into the next season before confirming, since departing notes are deleted.
 
 The active season and notes are saved together in the same Firestore document, with an atomic local JSON fallback. The app also reads the original flat-list format. Failed saves keep the existing state, and reloading preserves the active season. Test rollover in a separate local copy if you want to try it without deleting your real season notes.
 
@@ -101,15 +124,38 @@ The active season and notes are saved together in the same Firestore document, w
 
 ## Customizing Events
 
-Edit `events.json` and add events inside the target phase list:
+Edit `events.json` and add events inside the target phase list. A complete entry looks like this:
 
 ```json
-{ "title": "Event Name", "effect": "Event instruction text." }
+{
+  "id": "regular-season--extra-shooting-work",
+  "title": "Extra Shooting Work",
+  "effect": "The player drawn gains +2 Three-Point Shot for the next 3 team games.",
+  "impact": "Low Impact",
+  "requires_team": true,
+  "requires_player": true,
+  "target": "The drawn roster rank on the drawn team, ranked by overall.",
+  "duration": "Next 3 team games",
+  "tracking": "Record the actual increase and its expiry; remove only this event's increase afterward.",
+  "needs_review": false,
+  "note_season_offset": 0,
+  "resolve_before_rollover": false
+}
 ```
 
-To trigger automatic number rolls, include this phrase pattern in the effect text:
+Use `Low Impact`, `Medium Impact`, or `High Impact` explicitly. For an uncertain event, set `needs_review: true`, add a nonempty list of `review_notes`, and preserve its wording in `original_effect`. An optional `review_suggestion` provides an alternative for you to consider.
 
-- Draw a number between 1 and 45 ...
+To roll a number, add `roll_type: "range"`, integer `roll_min` and `roll_max`, and a descriptive `roll_purpose`. Optional `roll_outcomes` entries have `min`, `max`, and `label`; they must cover the entire range without gaps or overlaps. The app displays the result and copies it into event notes.
+
+`note_season_offset: 1` schedules the note for the following season; `0` uses the active season. `resolve_before_rollover: true` adds an unfinished-note reminder to the rollover confirmation. These fields do not apply changes inside NBA 2K or execute future outcomes automatically.
+
+Legacy entries containing only `title` and `effect` still load, including the automatic-roll phrase “Draw a number between 1 and 45”. Explicit metadata is preferred for new entries.
+
+Validate changes with:
+
+```bash
+python3.11 -m unittest discover -s tests
+```
 
 ---
 

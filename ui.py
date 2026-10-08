@@ -72,6 +72,10 @@ def empty_state(title: str, description: str, *, compact: bool = False) -> None:
 
 
 def render_event(event: dict) -> None:
+    if event.get("needs_review"):
+        st.warning("Needs your review before applying: " + " ".join(event.get("review_notes", [])))
+        if event.get("review_suggestion"):
+            st.info("Suggested alternative: " + event["review_suggestion"])
     intensity = str(event.get("intensity", ""))
     tier = {"Low Impact": "low", "Medium Impact": "medium", "High Impact": "high"}.get(intensity, "high")
     html(f"""
@@ -82,6 +86,15 @@ def render_event(event: dict) -> None:
   <div class="event-phase">{escape(str(event.get('phase', '')))}<span> • </span>Generated event</div>
 </article>
 """)
+    if event.get("duration"):
+        html(f'<div class="event-guidance"><strong>Duration</strong><span>{escape(event["duration"])}</span>'
+             f'<strong>Eligible target</strong><span>{escape(event.get("target", "Use the event instructions."))}</span></div>')
+        st.caption("No eligible target? Skip this event. Check player eligibility manually; a random roster rank does not verify it.")
+    if event.get("tracking"):
+        with st.expander("Follow-up & restoration"):
+            st.write(event["tracking"])
+            if event.get("note_season_offset"):
+                st.caption("Use latest event will schedule this note for the next season.")
     entities = [("Team", event.get("team")), ("Team 2", event.get("team_2")), ("Player", event.get("player"))]
     cards = "".join(
         f'<div class="context-card"><span>{label}</span><strong>{escape(str(value))}</strong></div>'
@@ -92,8 +105,9 @@ def render_event(event: dict) -> None:
     if event.get("event_roll"):
         roll = event["event_roll"]
         html(f'<div class="number-draw"><span class="draw-value">{escape(str(roll["value"]))}</span>'
-             '<div><strong>Random number draw</strong>'
-             f'<p>Automatically rolled · Range {escape(str(roll["label"]))}</p></div></div>')
+             f'<div><strong>{escape(roll.get("purpose", "Random number draw"))}</strong>'
+             f'<p>Automatically rolled · Range {escape(str(roll["label"]))}</p>'
+             + (f'<p>{escape(roll["outcome"])}</p>' if roll.get("outcome") else "") + '</div></div>')
 
 
 def render_weight_distribution(weights: dict) -> None:
@@ -115,6 +129,8 @@ def render_note_card(item: dict) -> None:
     tags = f'<span class="note-tag">{escape(season_label(item["season"]))}</span>'
     if phase and phase != "Any":
         tags += f'<span class="note-tag">{escape(str(phase))}</span>'
+    if item.get("resolve_before_rollover") and not done:
+        tags += '<span class="note-tag review">Review before season rollover</span>'
     if item.get("due"):
         try:
             review = date.fromisoformat(item["due"]).strftime("%d %b %Y")

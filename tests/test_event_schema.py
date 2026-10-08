@@ -66,6 +66,27 @@ class EventSchemaTests(unittest.TestCase):
                 "Phase": [{"title": "x", "effect": "y", "roll_type": "range", "roll_min": 10, "roll_max": 10}]
             })
 
+    def test_flagged_events_require_actionable_review_questions(self):
+        with self.assertRaises(ValueError):
+            validate_events_schema({"Phase": [{"title": "X", "effect": "Y", "needs_review": True}]})
+
+    def test_duplicate_ids_and_invalid_season_offsets_are_rejected(self):
+        with self.assertRaises(ValueError):
+            validate_events_schema({"Phase": [{"id": "x", "title": "X", "effect": "Y"}] * 2})
+        for offset in (-1, True, "next"):
+            with self.assertRaises(ValueError):
+                validate_events_schema({"Phase": [{"title": "X", "effect": "Y", "note_season_offset": offset}]})
+
+    def test_roll_outcomes_must_cover_range_without_gaps(self):
+        for outcomes in (
+            [{"min": 1, "max": 2, "label": "A"}],
+            [{"min": 1, "max": 2, "label": "A"}, {"min": 2, "max": 6, "label": "B"}],
+            [{"min": 1, "max": 2, "label": "A"}, {"min": 4, "max": 6, "label": "B"}],
+        ):
+            with self.assertRaises(ValueError):
+                validate_events_schema({"Phase": [{"title": "X", "effect": "Y", "roll_type": "range",
+                                                   "roll_min": 1, "roll_max": 6, "roll_outcomes": outcomes}]})
+
 
 if __name__ == "__main__":
     unittest.main()

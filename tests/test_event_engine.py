@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import patch
 
 from event_engine import (
+    build_event_note,
     extract_draw_range,
     generate_event_number,
     get_event_intensity,
@@ -98,8 +99,56 @@ class EventEngineTests(unittest.TestCase):
         args, kwargs = mock_choices.call_args
         self.assertEqual(kwargs["k"], 1)
         self.assertEqual(args[0], events)
-        self.assertAlmostEqual(kwargs["weights"][0], 3.5)  # penalized from 10 to 3.5
-        self.assertAlmostEqual(kwargs["weights"][1], 10.0)
+        self.assertAlmostEqual(kwargs["weights"][0] / kwargs["weights"][1], 0.35)
+        self.assertAlmostEqual(sum(kwargs["weights"]), 10.0)
+
+    @patch("event_engine.random.choices")
+    def test_tier_probability_is_independent_of_catalog_size(self, choices):
+        events = [{"id": f"low-{i}", "title": f"Low {i}", "impact": "Low Impact"} for i in range(10)]
+        events += [{"title": "Medium", "impact": "Medium Impact"}, {"title": "High", "impact": "High Impact"}]
+        choices.return_value = [events[0]]
+        weighted_random_event(events, {"Low Impact": 50, "Medium Impact": 30, "High Impact": 20}, {"low-0"})
+        members = choices.call_args.args[0]
+        weights = choices.call_args.kwargs["weights"]
+        totals = {tier: sum(w for e, w in zip(members, weights) if e["impact"] == tier)
+                  for tier in ("Low Impact", "Medium Impact", "High Impact")}
+        self.assertAlmostEqual(totals["Low Impact"], 50)
+        self.assertAlmostEqual(totals["Medium Impact"], 30)
+        self.assertAlmostEqual(totals["High Impact"], 20)
+
+    @patch("event_engine.random.choices")
+    def test_disabled_and_missing_tiers_are_excluded(self, choices):
+        low = {"title": "Low", "impact": "Low Impact"}
+        high = {"title": "High", "impact": "High Impact"}
+        choices.return_value = [low]
+        weighted_random_event([low, high], {"Low Impact": 50, "Medium Impact": 30, "High Impact": 0}, set())
+        self.assertEqual(choices.call_args.args[0], [low])
+
+    def test_empty_pool_has_clear_error(self):
+        with self.assertRaises(ValueError):
+            weighted_random_event([], {}, set())
+
+    @patch("event_engine.random.randint", return_value=4)
+    def test_outcome_roll_has_readable_result(self, _):
+        roll = generate_event_number({"roll_type": "range", "roll_min": 1, "roll_max": 6,
+                                      "roll_purpose": "Availability", "roll_outcomes": [
+                                          {"min": 1, "max": 2, "label": "Play normally"},
+                                          {"min": 3, "max": 4, "label": "Cap at 24 minutes"},
+                                          {"min": 5, "max": 6, "label": "Sit out"}]})
+        self.assertEqual(roll["outcome"], "Cap at 24 minutes")
+        self.assertEqual(roll["purpose"], "Availability")
+
+    def test_event_note_carries_timing_review_and_actual_roll(self):
+        event = {"id": "example", "title": "Return next year", "effect": "Check the player on return.",
+                 "phase": "Free Agency", "duration": "Next season", "tracking": "Restore availability.",
+                 "note_season_offset": 1, "needs_review": True, "review_notes": ["Choose attributes."],
+                 "event_roll": {"value": 2, "label": "1-2", "outcome": "Improve"}}
+        note = build_event_note(event, 2026)
+        self.assertEqual(note["season"], 2027)
+        self.assertEqual(note["phase"], "Any")
+        self.assertEqual(note["source_event_id"], "example")
+        for text in ("Next season", "Restore availability", "2 (range 1-2)", "Improve", "Choose attributes"):
+            self.assertIn(text, note["details"])
 
     @patch("event_engine.random.choice")
     def test_weighted_random_event_falls_back_if_all_weights_zero(self, mock_choice):
