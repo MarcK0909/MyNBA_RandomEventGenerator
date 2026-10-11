@@ -64,7 +64,7 @@ class NotebookAppTests(unittest.TestCase):
         self.assertEqual(self.app.selectbox(key="note_season").value, 2026)
         self.app.text_input(key="note_title").set_value("A scheduled note")
         self.app.selectbox(key="note_season").set_value(2027)
-        self.app.button(key="FormSubmitter:note_editor-Save note").click().run()
+        self.app.button(key="save_note").click().run()
         saved = json.loads(self.path.read_text())
         note = saved["items"][0]
         self.assertEqual(note["season"], 2027)
@@ -77,7 +77,7 @@ class NotebookAppTests(unittest.TestCase):
         self.app.button(key="edit_current").click().run()
         self.assertEqual(self.app.text_input(key="note_title").value, "Current storyline")
         self.app.text_input(key="note_title").set_value("Updated storyline")
-        self.app.button(key="FormSubmitter:note_editor-Save changes").click().run()
+        self.app.button(key="save_note").click().run()
         self.app.button(key="done_current").click().run()
         self.assertEqual(self.app.radio(key="workspace").value, "Notepad")
         self.app.selectbox(key="note_status").set_value("Completed").run()
@@ -115,15 +115,13 @@ class NotebookAppTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_event_draw_does_not_replace_draft(self):
-        # AppTest only sends form edits when the form is submitted. Seed the
-        # server-side draft directly so this tests drawing without saving it.
         before = self.path.read_bytes()
-        self.app.session_state["note_title"] = "My unsaved idea"
-        self.app.session_state["note_details"] = "Keep the rookie in the rotation."
-        self.app.run()
+        self.app.text_input(key="note_title").set_value("My unsaved idea").run()
+        self.app.text_area(key="note_details").set_value("Keep the rookie in the rotation.").run()
         self.assertEqual(self.app.text_input(key="note_title").value, "My unsaved idea")
 
-        event = {"title": "Test rotation change", "effect": "Give the bench extra minutes."}
+        event = {"title": "Test rotation change", "effect": "Give the bench extra minutes.",
+                 "resolve_before_rollover": True}
         with patch("event_engine.weighted_random_event", return_value=event):
             self.app.button(key="gen_Regular Season").click().run()
         self.assertFalse(self.app.exception)
@@ -149,14 +147,61 @@ class NotebookAppTests(unittest.TestCase):
         saved = json.loads(self.path.read_text())
         self.assertNotIn("current", [note["id"] for note in saved["items"]])
 
+    def test_tracking_event_suggests_note_without_saving_and_can_be_dismissed(self):
+        before = self.path.read_bytes()
+        self.app.text_input(key="filter_Regular Season").set_value("Minutes Restriction").run()
+        self.app.button(key="gen_Regular Season").click().run()
+        self.assertEqual(self.app.text_input(key="note_title").value, "Minutes Restriction")
+        self.assertIn("Minutes cap:", self.app.text_area(key="note_details").value)
+        self.assertTrue(any("not saved yet" in info.value for info in self.app.info))
+        self.assertEqual(self.path.read_bytes(), before)
+        self.app.button(key="reset_note_editor").click().run()
+        self.app.run()
+        self.assertEqual(self.app.text_input(key="note_title").value, "")
+        self.assertEqual(self.path.read_bytes(), before)
+        self.app.button(key="gen_Regular Season").click().run()
+        self.app.button(key="save_note").click().run()
+        self.assertEqual(json.loads(self.path.read_text())["items"][0]["title"], "Minutes Restriction")
+
+    def test_draw_keeps_existing_suggestion_until_saved_or_cleared(self):
+        self.app.text_input(key="filter_Regular Season").set_value("Minutes Restriction").run()
+        self.app.button(key="gen_Regular Season").click().run()
+        details = self.app.text_area(key="note_details").value
+        self.app.text_input(key="filter_Regular Season").set_value("Game-Time Decision").run()
+        with patch("event_engine.weighted_random_event", return_value={
+            "title": "Another follow-up", "effect": "Wait for next year.", "note_season_offset": 1,
+        }):
+            self.app.text_input(key="filter_Regular Season").set_value("").run()
+            self.app.button(key="gen_Regular Season").click().run()
+        self.assertEqual(self.app.text_input(key="note_title").value, "Minutes Restriction")
+        self.assertEqual(self.app.text_area(key="note_details").value, details)
+
+    def test_tracking_draw_preserves_note_being_edited(self):
+        before = self.path.read_bytes()
+        self.open_notebook()
+        self.app.button(key="edit_current").click().run()
+        self.app.radio(key="workspace").set_value("Event Generator").run()
+        self.app.text_input(key="filter_Regular Season").set_value("Minutes Restriction").run()
+        self.app.button(key="gen_Regular Season").click().run()
+        self.assertEqual(self.app.session_state.editing_note_id, "current")
+        self.assertEqual(self.app.text_input(key="note_title").value, "Current storyline")
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_tracking_draw_preserves_draft_season_selection(self):
+        self.app.selectbox(key="note_season").set_value(2028).run()
+        self.app.text_input(key="filter_Regular Season").set_value("Minutes Restriction").run()
+        self.app.button(key="gen_Regular Season").click().run()
+        self.assertEqual(self.app.selectbox(key="note_season").value, 2028)
+        self.assertEqual(self.app.text_input(key="note_title").value, "")
+
     def test_external_note_changes_are_not_overwritten_by_stale_draft(self):
         store = NotepadStore(self.path)
         store.save(save_note(store.load(), title="Another session's note", season=2026))
         self.app.text_input(key="note_title").set_value("My draft")
-        self.app.button(key="FormSubmitter:note_editor-Save note").click().run()
+        self.app.button(key="save_note").click().run()
         self.assertTrue(self.app.error)
         self.assertEqual(self.app.text_input(key="note_title").value, "My draft")
-        self.app.button(key="FormSubmitter:note_editor-Save note").click().run()
+        self.app.button(key="save_note").click().run()
         titles = [note["title"] for note in json.loads(self.path.read_text())["items"]]
         self.assertIn("Another session's note", titles)
         self.assertIn("My draft", titles)
@@ -172,7 +217,7 @@ class NotebookAppTests(unittest.TestCase):
         self.assertTrue(self.app.session_state.last_event["needs_review"])
         self.app.button(key="use_event_in_note").click().run()
         self.assertEqual(self.app.selectbox(key="note_season").value, 2027)
-        self.assertIn("NEEDS YOUR REVIEW", self.app.text_area(key="note_details").value)
+        self.assertIn("Effect: Check the selected player next season.", self.app.text_area(key="note_details").value)
 
     def test_review_workspace_lists_questions_and_does_not_change_notes(self):
         self.add_review_fixture()
@@ -200,16 +245,23 @@ class NotebookAppTests(unittest.TestCase):
                 event = self.app.session_state.last_event
                 self.assertEqual(event["title"], title)
                 self.assertIsNone(event["player"], "Do not add a second, conflicting roster roll")
-                self.app.button(key="use_event_in_note").click().run()
+                if title == "Hustle Guy":
+                    self.assertEqual(self.app.text_input(key="note_title").value, "")
+                    self.app.button(key="use_event_in_note").click().run()
+                else:
+                    self.assertEqual(self.app.text_input(key="note_title").value, title)
                 self.assertEqual(self.app.selectbox(key="note_season").value, season)
-                self.app.button(key="FormSubmitter:note_editor-Save note").click().run()
+                self.app.button(key="save_note").click().run()
                 note = json.loads(self.path.read_text())["items"][0]
                 self.assertEqual(note["season"], season)
-                self.assertIn(f'{event["roll_purpose"]}: {value} (range {bounds[0]}-{bounds[1]})', note["details"])
+                self.assertIn(f'Team: {event["team"]}', note["details"])
                 if outcome:
                     self.assertIn(outcome, event["event_roll"]["outcome"])
                     self.assertIn(outcome, note["details"])
+                    self.assertIn("Player: [enter player name]", note["details"])
+                    self.assertNotIn(event["effect"], note["details"])
                 else:
+                    self.assertIn(f"Player: #{value} (summer league player rank)", note["details"])
                     self.assertIn("by 5", note["details"])
 
     def test_event_note_keeps_roll_and_warns_at_rollover(self):
@@ -217,7 +269,7 @@ class NotebookAppTests(unittest.TestCase):
         self.app.button(key="gen_Regular Season").click().run()
         self.app.button(key="use_event_in_note").click().run()
         self.assertIn("Minutes cap:", self.app.text_area(key="note_details").value)
-        self.app.button(key="FormSubmitter:note_editor-Save note").click().run()
+        self.app.button(key="save_note").click().run()
         saved = json.loads(self.path.read_text())["items"][0]
         self.assertTrue(saved["resolve_before_rollover"])
         self.assertEqual(saved["source_event_id"], "regular-season--minutes-restriction")

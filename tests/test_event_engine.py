@@ -138,17 +138,17 @@ class EventEngineTests(unittest.TestCase):
         self.assertEqual(roll["outcome"], "Cap at 24 minutes")
         self.assertEqual(roll["purpose"], "Availability")
 
-    def test_event_note_carries_timing_review_and_actual_roll(self):
+    def test_event_note_keeps_only_context_and_future_outcome_in_details(self):
         event = {"id": "example", "title": "Return next year", "effect": "Check the player on return.",
                  "phase": "Free Agency", "duration": "Next season", "tracking": "Restore availability.",
                  "note_season_offset": 1, "needs_review": True, "review_notes": ["Choose attributes."],
+                 "team": "Boston Celtics", "player": "Example Player",
                  "event_roll": {"value": 2, "label": "1-2", "outcome": "Improve"}}
         note = build_event_note(event, 2026)
         self.assertEqual(note["season"], 2027)
         self.assertEqual(note["phase"], "Any")
         self.assertEqual(note["source_event_id"], "example")
-        for text in ("Next season", "Restore availability", "2 (range 1-2)", "Improve", "Choose attributes"):
-            self.assertIn(text, note["details"])
+        self.assertEqual(note["details"], "Team: Boston Celtics\nPlayer: Example Player\nEffect: Improve")
 
     @patch("event_engine.random.choice")
     def test_weighted_random_event_falls_back_if_all_weights_zero(self, mock_choice):

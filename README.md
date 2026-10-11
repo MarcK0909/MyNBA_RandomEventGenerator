@@ -85,7 +85,7 @@ Compare the [original layout](docs/ui-before.png) with the [first design refresh
 2. Click **Generate Event**.
 3. The app chooses an event using weighted probability, applies anti-repeat logic, and rolls any required number ranges.
 4. The generated event displays team/player context only when needed.
-5. Choose **Use latest event** to fill a note, or write one yourself. New event draws leave your draft intact.
+5. Events with temporary effects, season-end reminders, or future-season follow-ups automatically fill an empty note editor. Review the suggested draft and click **Save note**, or **Clear draft** to skip it. Existing drafts and notes being edited stay intact; **Use latest event** lets you replace a draft explicitly.
 6. Open **Notepad** to create, edit, search, complete, reopen, or delete your notes.
 
 The default impact weights give Low, Medium, and High tiers a **50% / 30% / 20%** chance when all three are available. A tier's number of events does not change its total chance. Missing or disabled tiers redistribute their share among the remaining enabled tiers; the generator shows the effective split for your current search. Recent draws receive a smaller chance within their tier. If every available tier has zero weight, events are drawn with equal probability.
@@ -115,7 +115,8 @@ See the [season notebook preview](docs/ui-notebook.png).
 - Advancing permanently deletes all notes assigned to the departing season, including completed notes. Notes scheduled for the new season become visible; later notes stay stored and hidden. Merely selecting another phase never advances the season.
 - For example, moving from **2026–27** to **2027–28** deletes the 2026–27 notes, reveals the 2027–28 notes, and keeps 2028–29 notes hidden.
 - A review date is optional and does not control season progression. You advance the season manually when your MyNBA playoffs are finished.
-- **Use latest event** includes the actual roll, target, duration, and follow-up in your draft. Events with a next-season follow-up preselect that future season. Saving the draft is still required.
+- Generated note details contain only the team, player, and effect. Future follow-ups with a rolled outcome show the chosen result rather than both possible outcomes. If you select the player manually, replace `[enter player name]` before saving. Full guidance remains on the event card. Events with a next-season follow-up preselect that future season.
+- Automatic suggestions use the same details and season selection. Events qualify when `resolve_before_rollover` is true or `note_season_offset` is greater than zero. One-time changes stay available through **Use latest event**. Typing updates only the draft in your browser session; persistence still requires **Save note**.
 - Notes marked **Remind me before season rollover** appear in the rollover confirmation while unfinished. Handle retirements and restore expired temporary changes before advancing. Move any still-active follow-up into the next season before confirming, since departing notes are deleted.
 
 The active season and notes are saved together in the same Firestore document, with an atomic local JSON fallback. The app also reads the original flat-list format. Failed saves keep the existing state, and reloading preserves the active season. Test rollover in a separate local copy if you want to try it without deleting your real season notes.

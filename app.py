@@ -115,6 +115,7 @@ def commit_notebook(updated: dict) -> bool:
 
 def reset_note_editor():
     st.session_state.editing_note_id = None
+    st.session_state.note_auto_suggested = False
     st.session_state.note_editor_pending = {
         "note_title": "", "note_details": "", "note_review_date": None,
         "note_phase": "Any", "note_season": st.session_state.notebook["current_season"],
@@ -132,6 +133,7 @@ def edit_note(item_id: str):
     except ValueError:
         review_date = None
     st.session_state.editing_note_id = item_id
+    st.session_state.note_auto_suggested = False
     st.session_state.note_editor_pending = {
         "note_title": item.get("title", ""), "note_details": item.get("details", ""),
         "note_review_date": review_date, "note_phase": item.get("phase", "Any"),
@@ -179,9 +181,9 @@ def remove_notepad_item(item_id: str):
 
 
 def prefill_notepad_adder_for_event(event_payload: dict):
-    # Filling a form is explicit so another event draw never overwrites a draft.
     draft = build_event_note(event_payload, st.session_state.notebook["current_season"])
     st.session_state.editing_note_id = None
+    st.session_state.note_auto_suggested = False
     st.session_state.note_editor_pending = {
         "note_title": draft["title"],
         "note_details": draft["details"],
@@ -192,6 +194,24 @@ def prefill_notepad_adder_for_event(event_payload: dict):
         "note_resolve_before_rollover": draft["resolve_before_rollover"],
     }
     st.session_state.note_editor_error = ""
+
+
+def suggest_event_note(event_payload: dict):
+    if not (event_payload.get("resolve_before_rollover") or event_payload.get("note_season_offset", 0) > 0):
+        return
+    if st.session_state.editing_note_id is not None:
+        return
+    pending = st.session_state.get("note_editor_pending", {})
+    defaults = {
+        "note_title": "", "note_details": "", "note_review_date": None,
+        "note_phase": "Any", "note_season": st.session_state.notebook["current_season"],
+        "note_source_event_id": None, "note_resolve_before_rollover": False,
+    }
+    if any(pending.get(key, st.session_state.get(key, default)) != default
+           for key, default in defaults.items()):
+        return
+    prefill_notepad_adder_for_event(event_payload)
+    st.session_state.note_auto_suggested = True
 
 
 def set_selected_phase(phase_name: str):
@@ -250,6 +270,8 @@ def render_notepad_editor():
                     "Make a change, then save it to your notebook." if editing else "Capture a storyline now. Choose when it matters.", panel=True, anchor="note-editor")
     if st.session_state.note_editor_error:
         st.error(st.session_state.note_editor_error)
+    if st.session_state.get("note_auto_suggested"):
+        st.info("Suggested follow-up — not saved yet. Review it and choose Save note, or Clear draft to skip it.")
     current = st.session_state.notebook["current_season"]
     season_options = list(range(current, current + 21))
     selected = st.session_state.get("note_season", current)
@@ -257,7 +279,9 @@ def render_notepad_editor():
         season_options.append(selected)
     if st.session_state.get("note_phase") not in ["Any"] + phases:
         st.session_state.note_phase = "Any"
-    with st.form("note_editor", border=False):
+    # Keep draft edits in session state so an event draw can detect them before
+    # suggesting a note. A form would hide unsubmitted edits from the server.
+    with st.container(border=False):
         st.text_input("Note title", key="note_title", placeholder="e.g. Give the rookie a bigger role")
         st.text_area("Details", key="note_details", placeholder="The change, the player, the follow-up…", height=130)
         st.selectbox("Show this note in", season_options, key="note_season",
@@ -267,7 +291,7 @@ def render_notepad_editor():
             st.selectbox("Related phase", ["Any"] + phases, key="note_phase")
             st.date_input("Review date", value=None, key="note_review_date", help="Optional reminder date. Seasons advance manually, independently of the calendar.")
             st.checkbox("Remind me before season rollover", key="note_resolve_before_rollover")
-        st.form_submit_button("Save changes" if editing else "Save note", type="primary", use_container_width=True, on_click=submit_note)
+        st.button("Save changes" if editing else "Save note", key="save_note", type="primary", use_container_width=True, on_click=submit_note)
     st.button("Cancel editing" if editing else "Clear draft", key="reset_note_editor", use_container_width=True, on_click=reset_note_editor)
     if st.session_state.last_event and not editing:
         st.button("Use latest event", key="use_event_in_note", use_container_width=True,
@@ -372,6 +396,7 @@ def roll_event_for_phase(phase_name: str):
         "event_roll": event_roll
     }
     history[phase_name] = (history.get(phase_name, []) + [event.get("id", event["title"])])[-5:]
+    suggest_event_note(st.session_state.last_event)
     st.toast("🏀 New event generated!", icon="🎲")
 
 # -----------------------------

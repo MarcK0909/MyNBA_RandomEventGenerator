@@ -32,7 +32,7 @@ When an event is drawn, resolve it in this order:
 1. Read the event title and effect.
 2. Read its eligible target, duration, number roll, and follow-up instructions. If it is flagged, decide the unresolved questions before applying it.
 3. Verify the target in your save, then apply the change manually in NBA 2K. Record original values and the actual changes made.
-4. Use **Use latest event** and save the note to track the result and its expiry.
+4. For events needing tracking, review the automatically suggested note and click **Save note** to keep it, or **Clear draft** to skip it. If you already have a draft, it is preserved; use **Use latest event** when you want to replace it.
 5. Move on to the next major phase or decision point.
 
 ## 4) Best Practices
@@ -76,7 +76,7 @@ Mark items done once the follow-up has been handled.
 
 ## 8) Season Follow-ups
 
-- Saving an event note preserves its actual roll, target context, duration, and follow-up. It does not change your NBA 2K save.
+- Generated notes keep the team, player, and effect to apply, including the rolled result. Enter the player’s name when selection is manual. Full duration and follow-up guidance remains on the event card. Saving a note does not change your NBA 2K save.
 - Events with a future-season follow-up preselect that season in the note editor. Save the note to schedule it; it stays hidden until that season starts.
 - Resolve retirement instructions and restore changes that expire at season end before confirming rollover. Unfinished notes with the rollover reminder enabled appear in the confirmation.
 - If an injury or other effect continues into the next season, move its note to that season before advancing. Rollover deletes notes from the departing season and does not end an ongoing injury in your save.

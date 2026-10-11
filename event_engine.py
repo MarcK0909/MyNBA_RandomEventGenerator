@@ -141,25 +141,28 @@ def requires_player_draw(event: dict) -> bool:
 
 
 def build_event_note(event: dict, current_season: int) -> dict:
-    """Prepare a traceable follow-up without translating game time to real dates."""
-    lines = [event.get("effect", "")]
-    targets = [str(event[key]) for key in ("team", "team_2", "player") if event.get(key)]
-    if targets:
-        lines.append("Context: " + " · ".join(targets))
-    for field, label in (("target", "Eligible target"), ("duration", "Duration"), ("tracking", "Follow-up")):
-        if event.get(field):
-            lines.append(f"{label}: {event[field]}")
+    """Prepare a short action note; leave full event guidance on the event card."""
+    teams = [str(event[key]) for key in ("team", "team_2") if event.get(key)]
+    player = event.get("player")
+    effect = event.get("effect", "")
     roll = event.get("event_roll")
     if roll:
-        result = f'{roll.get("purpose", "Random draw")}: {roll["value"]} (range {roll["label"]})'
-        if roll.get("outcome"):
-            result += f' — {roll["outcome"]}'
-        lines.append(result)
-    if event.get("needs_review"):
-        lines.append("NEEDS YOUR REVIEW BEFORE APPLYING:\n" + "\n".join(event.get("review_notes", [])))
+        purpose = roll.get("purpose", "Roll")
+        if purpose in ("Draft-board rank", "Summer League player rank"):
+            player = player or f'#{roll["value"]} ({purpose.lower()})'
+        elif roll.get("outcome") and event.get("note_season_offset", 0) > 0:
+            effect = roll["outcome"]
+        else:
+            result = roll.get("outcome") or f'{purpose}: {roll["value"]}'
+            effect += f"\n{result}"
+    lines = []
+    if teams:
+        lines.append("Team: " + " · ".join(teams))
+    lines.append("Player: " + (str(player) if player else "[enter player name]"))
+    lines.append("Effect: " + effect)
     return {
         "title": event.get("title", "Generated event"),
-        "details": "\n\n".join(lines),
+        "details": "\n".join(lines),
         "season": current_season + event.get("note_season_offset", 0),
         "phase": "Any" if event.get("note_season_offset", 0) else event.get("phase", "Any"),
         "source_event_id": event.get("id"),
