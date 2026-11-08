@@ -1,0 +1,10 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // Only the trusted Python server accesses Firestore via the Admin SDK.
+    // Google OIDC in Streamlit is not a Firebase client authentication token.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

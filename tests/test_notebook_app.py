@@ -39,6 +39,7 @@ class NotebookAppTests(unittest.TestCase):
 
     def new_app(self):
         app = AppTest.from_file(str(ROOT / "app.py"), default_timeout=20)
+        app.user = {"is_logged_in": True, "iss": "https://accounts.google.com", "sub": "notebook-tests", "name": "Notebook Tester"}
         app.secrets["firebase"] = {}
         app.run()
         self.assertFalse(app.exception)

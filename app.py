@@ -1,5 +1,4 @@
 import streamlit as st  # type: ignore
-import logging
 import random
 import time
 from datetime import date
@@ -10,6 +9,8 @@ from season_notebook import (
     scheduled_notes, season_label, set_note_done,
 )
 from notepad_store import NotepadStore, NotepadStorageError
+from user_auth import google_user_id, require_google_user
+from firestore_connection import get_firestore_doc_ref
 from match_events import draw_match_event, load_match_events
 from event_engine import (
     build_event_note,
@@ -40,12 +41,13 @@ st.set_page_config(
     layout="wide"
 )
 
+CURRENT_USER_ID = require_google_user()
+
 # -----------------------------
 # Load events
 # -----------------------------
 EVENTS = load_events("events.json")
 phases = list(EVENTS.keys())
-logger = logging.getLogger(__name__)
 
 PHASE_BUTTON_LABELS = {
     "Regular Season": "Regular Season",
@@ -61,35 +63,22 @@ PHASE_BUTTON_LABELS = {
 }
 
 
-@st.cache_resource
-def get_firestore_doc_ref():
-    try:
-        firebase_cfg = st.secrets.get("firebase")
-        if not firebase_cfg:
-            return None
-        import firebase_admin  # type: ignore
-        from firebase_admin import credentials, firestore  # type: ignore
-        try:
-            firebase_admin.get_app()
-        except ValueError:
-            firebase_admin.initialize_app(credentials.Certificate(dict(firebase_cfg)))
-        db = firestore.client()
-        return db.collection(st.secrets.get("firestore_collection", "mynba")).document(
-            st.secrets.get("firestore_document", "event_notepad")
-        )
-    except Exception as exc:
-        logger.warning("Firestore unavailable: %s", type(exc).__name__)
-        return None
-
-
 def get_storage_backend_label() -> str:
     return st.session_state.notepad_store.backend
 
 
 def commit_notebook(updated: dict) -> bool:
     """Only update the visible state once the complete notebook is saved."""
+    # Callbacks execute before the script's sign-in gate on a rerun. Check the
+    # current identity again so an old callback cannot write another user's data.
     try:
-        # A second browser session may have advanced the shared notebook.
+        owner = google_user_id(st.user)
+    except ValueError:
+        return False
+    if owner != st.session_state.get("notebook_user_id"):
+        return False
+    try:
+        # Another browser session for this user may have advanced the notebook.
         latest = st.session_state.notepad_store.load()
         if latest["current_season"] != st.session_state.notebook["current_season"]:
             st.session_state.notebook = latest
@@ -461,7 +450,7 @@ if "locked_team" not in st.session_state:
     st.session_state.locked_team = None
 
 if "notebook" not in st.session_state:
-    st.session_state.notepad_store = NotepadStore(get_firestore_doc_ref(), initial_season=2026)
+    st.session_state.notepad_store = NotepadStore(get_firestore_doc_ref(CURRENT_USER_ID), initial_season=2026)
     try:
         st.session_state.notebook = st.session_state.notepad_store.load()
     except NotepadStorageError as exc:

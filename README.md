@@ -192,7 +192,9 @@ python3.11 -m unittest discover -s tests
 
 - Create a Firestore database in the `nba-event-generator` project.
 - Store your service account details in `.streamlit/secrets.toml` locally and in Streamlit Cloud secrets for deployment.
-- The app reads from collection `mynba` and document `event_notepad` by default.
+- Google sign-in is required. Each account gets its own `user_notebooks/{user_id}` document; the ID derives from Google’s stable account subject.
+- Follow [Google sign-in setup](docs/GOOGLE_SIGN_IN.md) for OAuth credentials, the deployed callback URL, Firestore access rules, and browser testing.
+- The old shared `mynba/event_notepad` is left untouched and is not automatically imported.
 - If Firestore is unavailable, loading or saving reports an error. There is no local fallback.
 
 ---
@@ -209,4 +211,4 @@ Run `python -m unittest discover -s tests` for unit and UI coverage, including s
 MYNBA_TEST_FIRESTORE=1 python -m unittest discover -s tests -p test_firestore_live.py
 ```
 
-The live test reads the configured notebook and exercises saving, editing, completion, deletion, and season rollover in a unique temporary document in the same collection. It deletes that test document afterward and never writes to your actual notebook. Existing `event_notepad.json` files are ignored; local-only notes are not automatically imported.
+The live tests exercise saving, editing, completion, deletion, and season rollover in temporary documents, plus a simulated Google callback with real UI saves for two separate user IDs. They delete those documents afterward and never write to an existing user’s notebook. Existing `event_notepad.json` files are ignored; local-only notes are not automatically imported.
