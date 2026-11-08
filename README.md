@@ -104,6 +104,18 @@ python3.11 scripts/export_event_review.py
 
 The script replaces the checklist, so keep final decisions in `events.json`.
 
+## Match Events
+
+Open **Match Events** for games you play yourself and click **Draw match event ↗**. There is no team or player setup: use your current team. Each draw randomly selects **Player Lock** or **Full Team** with equal odds, then a compatible event. Player Lock randomly picks a roster rank from **1–15** by overall (#1 is highest; break ties alphabetically by name). If that player is unavailable or your roster is shorter, draw again. Full Team lets you control everyone; player-specific effects still draw a random affected player from ranks 1–15.
+
+Draw once before tip-off. The four starter ideas are **Hot Hand** (+3 shooting), **Next Man Up** (a suspended star opens the door for a two-way call-up), **Run and Gun** (first-quarter transition challenge), and **Paint First** (attack the paint to open the game). Team-control challenges appear only in Full Team mode. Each event states its duration and how to end it. Apply edits manually and follow each event’s cleanup instructions afterward.
+
+**Next Man Up:** your highest-overall player sits for one game. Rank your available two-way players by overall and use the first existing rank in the randomly drawn priority order. In Player Lock, control that call-up. Give him at least half the game’s minutes and a temporary +3 overall (capped at 99). Meeting that minutes target plus either 20 points or a double-double earns a permanent +1 overall; otherwise restore his original rating. Restore the star and rotation afterward. No available two-way player? Draw again.
+
+The match generator has its own result and equal-probability draws, with consecutive repeats avoided when possible. It does not change your season event, notes, or timeline. Before replacing or clearing an active modifier, follow its cleanup instructions, retaining any earned permanent upgrade.
+
+Add more ideas in `match_events.json`: give each a unique `id`, `title`, `scope` (`Player` or `Team`), `modes`, `effect`, `duration`, and `cleanup`. Loading and selection live in `match_events.py`.
+
 ## Seasons and the Notepad
 
 See the [season notebook preview](docs/ui-notebook.png).

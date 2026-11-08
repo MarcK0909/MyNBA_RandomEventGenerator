@@ -43,6 +43,50 @@ class NotebookAppTests(unittest.TestCase):
     def open_notebook(self):
         self.app.radio(key="workspace").set_value("Notepad").run()
 
+    def test_match_workspace_keeps_season_event_draft_and_saved_notes(self):
+        before = self.path.read_bytes()
+        self.app.text_input(key="note_title").set_value("My season draft").run()
+        self.app.text_area(key="note_details").set_value("Keep these details").run()
+        self.app.selectbox(key="note_season").set_value(2027).run()
+        self.app.session_state.last_event = {"title": "Season event", "effect": "Keep me", "phase": "Playoffs"}
+        self.app.button(key="phase_btn_Playoffs").click().run()
+        self.app.radio(key="workspace").set_value("Match Events").run()
+        self.assertNotIn("prepare_next_season", [button.key for button in self.app.button])
+        with patch("match_events.random.choice", side_effect=lambda pool: pool[0]), patch("match_events.random.randint", return_value=15):
+            self.app.button(key="draw_match_event").click().run()
+            event = self.app.session_state.last_match_event
+            self.assertEqual(event["mode"], "Player Lock")
+            self.assertEqual(event["player"], "#15 (rank by overall)")
+            self.app.button(key="draw_match_event").click().run()
+        self.assertNotEqual(self.app.session_state.last_match_event["id"], event["id"])
+        self.app.radio(key="workspace").set_value("Event Generator").run()
+        self.assertEqual(self.app.text_input(key="note_title").value, "My season draft")
+        self.assertEqual(self.app.text_area(key="note_details").value, "Keep these details")
+        self.assertEqual(self.app.selectbox(key="note_season").value, 2027)
+        self.assertEqual(self.app.session_state.last_event["title"], "Season event")
+        self.app.radio(key="workspace").set_value("Match Events").run()
+        self.app.button(key="clear_match_event").click().run()
+        self.assertIsNone(self.app.session_state.last_match_event)
+        self.assertFalse(self.app.exception)
+        self.assertEqual(self.path.read_bytes(), before)
+
+    def test_match_workspace_draws_without_setup_and_keeps_result_on_rerun(self):
+        self.app.radio(key="workspace").set_value("Match Events").run()
+        keys = [widget.key for kind in (self.app.radio, self.app.selectbox, self.app.text_input) for widget in kind]
+        for removed in ("match_mode", "match_team", "match_player"):
+            self.assertNotIn(removed, keys)
+        with patch("match_events.random.choice", side_effect=lambda pool: "Full Team" if isinstance(pool[0], str) else pool[0]), patch("match_events.random.randint", return_value=12):
+            self.app.button(key="draw_match_event").click().run()
+        event = dict(self.app.session_state.last_match_event)
+        self.assertEqual(event["mode"], "Full Team")
+        self.assertEqual(event["player_rank"], 12)
+        self.assertTrue(any("**Control:** Full team" in item.value for item in self.app.markdown))
+        self.assertTrue(any("**Affected player:** #12" in item.value for item in self.app.markdown))
+        self.app.run()
+        self.assertEqual(dict(self.app.session_state.last_match_event), event)
+        self.assertFalse(self.app.exception)
+        self.assertFalse(self.app.warning)
+
     def add_review_fixture(self):
         # Review behavior must remain testable after the user approves or
         # removes every flagged event in the real catalog.

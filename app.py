@@ -11,6 +11,7 @@ from season_notebook import (
     scheduled_notes, season_label, set_note_done,
 )
 from notepad_store import NotepadStore, NotepadStorageError
+from match_events import draw_match_event, load_match_events
 from event_engine import (
     build_event_note,
     generate_event_number,
@@ -369,6 +370,56 @@ def render_event_review():
         empty_state("No flagged events in this view", "Try another phase or search term.", compact=True)
 
 
+def render_match_generator():
+    section_heading("01", "Match night", "A little unpredictability for the games you play.")
+    try:
+        catalog = load_match_events()
+    except (OSError, ValueError) as exc:
+        st.error(f"Could not load match events: {exc}")
+        return
+    previous = st.session_state.get("last_match_event") or {}
+    setup, result = st.columns([1, 1.6], gap="large")
+    with setup:
+        with st.container(border=True):
+            st.markdown("### Let the draw decide")
+            st.write("Player Lock or Full Team? Draw to reveal your controls and a match twist.")
+            st.caption("Player Lock normally picks a random player ranked 1–15 by overall. Call-up events draw from your available two-way players instead. #1 is the highest; break ties alphabetically by name. If no eligible player is available, draw again.")
+            st.caption("Draw once before tip-off. Apply the effect manually in NBA 2K.")
+            st.caption(f"{len(catalog)} starter events · 50/50 control mode with the starter catalog")
+            if st.button("Draw match event ↗", key="draw_match_event", type="primary", use_container_width=True):
+                try:
+                    st.session_state.last_match_event = draw_match_event(
+                        catalog, previous_id=previous.get("id"))
+                except ValueError as exc:
+                    st.warning(str(exc))
+            if st.session_state.get("last_match_event"):
+                st.caption("Before drawing again or clearing, follow the current event’s cleanup instructions, including any earned permanent upgrade. A new draw replaces the displayed event.")
+                if st.button("Clear match event", key="clear_match_event", use_container_width=True):
+                    st.session_state.last_match_event = None
+    with result:
+        event = st.session_state.get("last_match_event")
+        if event:
+            html(f'<article class="event-card medium"><div class="eyebrow">{escape(event["mode"])} · {escape(event["scope"])} EFFECT</div>'
+                 f'<h2>{escape(event["title"])}</h2><p class="event-effect">{escape(event["effect"])}</p></article>')
+            if event["mode"] == "Player Lock":
+                st.write(f'**Control:** Player Lock · {event["player"]}')
+            else:
+                st.write("**Control:** Full team")
+                if event["player"]:
+                    st.write(f'**Affected player:** {event["player"]}')
+            if event.get("player_pool") == "two_way":
+                st.caption("Rank available two-way players by overall, highest first; break ties alphabetically. Follow the drawn order and skip ranks that do not exist. With no available two-way player, draw again.")
+            st.write(f'**Duration:** {event["duration"]}')
+            st.write(f'**After the effect:** {event["cleanup"]}')
+        else:
+            empty_state("Who will you control tonight?", "Draw to reveal your control mode, a player when needed, and a match event.")
+    with st.expander("Explore the starter ideas"):
+        for event in catalog:
+            st.markdown(f'**{event["title"]} · {event["scope"]}**')
+            st.write(event["effect"])
+            st.caption(f'{event["duration"]} · {", ".join(event["modes"])}')
+
+
 def roll_event_for_phase(phase_name: str):
     history = st.session_state.setdefault("recent_event_history", {})
     recent_titles = set(history.get(phase_name, []))
@@ -427,6 +478,17 @@ for state_key, default in {
     if state_key not in st.session_state:
         st.session_state[state_key] = default
 
+# Keep the notebook draft while its widgets are hidden in the match workspace.
+if st.session_state.workspace == "Match Events":
+    draft = st.session_state.get("match_notebook_draft", {})
+    for key in ("note_title", "note_details", "note_review_date", "note_phase", "note_season", "note_resolve_before_rollover"):
+        if key in st.session_state:
+            st.session_state[key] = st.session_state[key]
+            draft[key] = st.session_state[key]
+    st.session_state.match_notebook_draft = draft
+elif "match_notebook_draft" in st.session_state:
+    st.session_state.note_editor_pending = st.session_state.pop("match_notebook_draft")
+
 if "note_title" not in st.session_state and "note_editor_pending" not in st.session_state:
     reset_note_editor()
 
@@ -443,56 +505,65 @@ render_header(sum(len(events) for events in EVENTS.values()), len(phases), show_
 # Weight controls
 # -----------------------------
 with st.sidebar:
-    html('<div class="sidebar-brand">League settings</div><div class="sidebar-kicker">SET THE TONE FOR YOUR SEASON</div>')
-    st.markdown("### Event intensity")
-    st.caption("Choose the probability split between available impact tiers. Each tier’s share is independent of its number of events.")
-
-    low_w = st.slider("Low Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Low Impact"], step=5)
-    med_w = st.slider("Medium Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Medium Impact"], step=5)
-    high_w = st.slider("High Impact", min_value=0, max_value=100, value=st.session_state.event_weights["High Impact"], step=5)
-
-    weight_total = low_w + med_w + high_w
-    if weight_total == 0:
-        st.warning("All tiers are set to 0. Using default weighting.")
-        st.session_state.event_weights = DEFAULT_EVENT_WEIGHTS.copy()
+    if st.session_state.workspace == "Match Events":
+        html('<div class="sidebar-brand">Match Events</div><div class="sidebar-kicker">ONE GAME. A NEW TWIST.</div>')
+        st.markdown("### Before tip-off")
+        st.write("Use your current team. Draw to discover whether you control the full team or a random player for this game.")
+        st.markdown("### At the final buzzer")
+        st.write("Undo temporary attribute changes. Match events do not advance your season or add notebook entries.")
+        st.caption("Control modes have equal odds. Player ranks 1–15 have equal odds. Then an eligible event is drawn, avoiding consecutive event repeats when possible.")
     else:
-        st.session_state.event_weights = {
-            "Low Impact": low_w,
-            "Medium Impact": med_w,
-            "High Impact": high_w
-        }
+        html('<div class="sidebar-brand">League settings</div><div class="sidebar-kicker">SET THE TONE FOR YOUR SEASON</div>')
+        st.markdown("### Event intensity")
+        st.caption("Choose the probability split between available impact tiers. Each tier’s share is independent of its number of events.")
 
-    render_weight_distribution(st.session_state.event_weights)
-    st.caption(f"Total weight: {sum(st.session_state.event_weights.values())}")
+        low_w = st.slider("Low Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Low Impact"], step=5)
+        med_w = st.slider("Medium Impact", min_value=0, max_value=100, value=st.session_state.event_weights["Medium Impact"], step=5)
+        high_w = st.slider("High Impact", min_value=0, max_value=100, value=st.session_state.event_weights["High Impact"], step=5)
 
-    st.markdown("---")
-    st.markdown("### Team context")
-    st.caption("Keep the spotlight on one franchise.")
-    use_locked_team = st.toggle("Lock team context", value=st.session_state.locked_team is not None)
-    if use_locked_team:
-        st.session_state.locked_team = st.selectbox("Locked team", TEAMS, index=0)
-    else:
-        st.session_state.locked_team = None
+        weight_total = low_w + med_w + high_w
+        if weight_total == 0:
+            st.warning("All tiers are set to 0. Using default weighting.")
+            st.session_state.event_weights = DEFAULT_EVENT_WEIGHTS.copy()
+        else:
+            st.session_state.event_weights = {
+                "Low Impact": low_w,
+                "Medium Impact": med_w,
+                "High Impact": high_w
+            }
 
-    if st.button("Clear last event", use_container_width=True):
-        st.session_state.last_event = None
-        st.toast("Last event cleared.")
+        render_weight_distribution(st.session_state.event_weights)
+        st.caption(f"Total weight: {sum(st.session_state.event_weights.values())}")
 
-    st.markdown("---")
-    st.markdown("### The number draw")
-    st.caption("Automatically rolled when a scenario calls for a random number.")
+        st.markdown("---")
+        st.markdown("### Team context")
+        st.caption("Keep the spotlight on one franchise.")
+        use_locked_team = st.toggle("Lock team context", value=st.session_state.locked_team is not None)
+        if use_locked_team:
+            st.session_state.locked_team = st.selectbox("Locked team", TEAMS, index=0)
+        else:
+            st.session_state.locked_team = None
 
-    if st.session_state.last_event and st.session_state.last_event.get("event_roll"):
-        roll = st.session_state.last_event["event_roll"]
-        html(f'<div class="sidebar-roll"><b>{escape(str(roll["value"]))}</b><span>Last auto-roll<br>Range {escape(str(roll["label"]))}</span></div>')
-    else:
-        st.caption("Waiting for your first number draw.")
+        if st.button("Clear last event", use_container_width=True):
+            st.session_state.last_event = None
+            st.toast("Last event cleared.")
 
-    st.markdown("---")
-    html(f'<div class="storage-label">Storage · {escape(get_storage_backend_label())}</div>')
+        st.markdown("---")
+        st.markdown("### The number draw")
+        st.caption("Automatically rolled when a scenario calls for a random number.")
 
-st.radio("Workspace", ["Event Generator", "Notepad", "Event Review"], horizontal=True, key="workspace", label_visibility="collapsed")
-render_season_controls()
+        if st.session_state.last_event and st.session_state.last_event.get("event_roll"):
+            roll = st.session_state.last_event["event_roll"]
+            html(f'<div class="sidebar-roll"><b>{escape(str(roll["value"]))}</b><span>Last auto-roll<br>Range {escape(str(roll["label"]))}</span></div>')
+        else:
+            st.caption("Waiting for your first number draw.")
+
+        st.markdown("---")
+        html(f'<div class="storage-label">Storage · {escape(get_storage_backend_label())}</div>')
+
+st.radio("Workspace", ["Event Generator", "Match Events", "Notepad", "Event Review"], horizontal=True, key="workspace", label_visibility="collapsed")
+if st.session_state.workspace != "Match Events":
+    render_season_controls()
 if st.session_state.notebook_error:
     st.error(st.session_state.notebook_error)
 if st.session_state.notebook_notice:
@@ -577,6 +648,9 @@ if st.session_state.workspace == "Event Generator":
     with notepad_col:
         with st.container(border=True):
             render_notepad_editor()
+
+elif st.session_state.workspace == "Match Events":
+    render_match_generator()
 
 elif st.session_state.workspace == "Notepad":
     notes_col, editor_col = st.columns([1.8, 1], gap="large")

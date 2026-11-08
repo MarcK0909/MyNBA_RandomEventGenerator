@@ -1,0 +1,27 @@
+[
+  {
+    "id": "match--hot-hand",
+    "title": "Hot Hand",
+    "scope": "Player",
+    "modes": [
+      "Player Lock",
+      "Full Team"
+    ],
+    "effect": "Give the selected player +3 Mid-Range Shot and +3 Three-Point Shot before tip-off.",
+    "duration": "This match only",
+    "cleanup": "Record the actual increases, respecting the editor's limits. Remove only those increases after the final buzzer."
+  },
+  {
+    "id": "match--next-man-up",
+    "title": "Next Man Up",
+    "scope": "Player",
+    "modes": [
+      "Player Lock",
+      "Full Team"
+    ],
+    "player_pool": "two_way",
+    "effect": "Your highest-overall player is suspended for this match: give him 0 minutes. Call up the selected two-way player in his place and play him for at least half the game (24 minutes in a 48-minute game). Record the call-up's original attributes and overall, then boost his attributes until his overall rises by 3, capped at 99. In Player Lock, control the call-up. A strong performance means reaching the minutes target AND either scoring 20 points or recording a double-double.",
+    "duration": "One match; a successful call-up keeps +1 overall permanently",
+    "cleanup": "After the game, restore the call-up's original attributes first. If he met the minutes and performance targets, adjust his attributes to finish 1 overall above his original rating, capped at 99. Otherwise keep his original rating. Restore the star's availability and normal rotation. If no two-way player is available, draw another event."
+  }
+]
