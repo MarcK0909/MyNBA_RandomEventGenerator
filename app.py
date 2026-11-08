@@ -4,7 +4,6 @@ import random
 import time
 from datetime import date
 from html import escape
-from pathlib import Path
 from constants import DEFAULT_EVENT_WEIGHTS, TEAMS
 from season_notebook import (
     active_notes, advance_season, delete_note, save_note,
@@ -46,7 +45,6 @@ st.set_page_config(
 # -----------------------------
 EVENTS = load_events("events.json")
 phases = list(EVENTS.keys())
-NOTEPAD_PATH = Path("event_notepad.json")
 logger = logging.getLogger(__name__)
 
 PHASE_BUTTON_LABELS = {
@@ -463,7 +461,7 @@ if "locked_team" not in st.session_state:
     st.session_state.locked_team = None
 
 if "notebook" not in st.session_state:
-    st.session_state.notepad_store = NotepadStore(NOTEPAD_PATH, get_firestore_doc_ref(), initial_season=2026)
+    st.session_state.notepad_store = NotepadStore(get_firestore_doc_ref(), initial_season=2026)
     try:
         st.session_state.notebook = st.session_state.notepad_store.load()
     except NotepadStorageError as exc:

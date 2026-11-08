@@ -1,83 +1,104 @@
-import json
-import tempfile
 import unittest
-from pathlib import Path
+from copy import deepcopy
 from unittest.mock import Mock, patch
 
 from notepad_store import NotepadStore, NotepadStorageError
-from season_notebook import advance_season, normalize_notebook
+from season_notebook import advance_season, normalize_notebook, save_note, delete_note, set_note_done
+
+
+def fake_firestore(document=None):
+    cloud = Mock()
+    cloud.document_data = deepcopy(document)
+
+    def get():
+        snapshot = Mock()
+        snapshot.exists = cloud.document_data is not None
+        snapshot.to_dict.return_value = deepcopy(cloud.document_data)
+        return snapshot
+
+    def set_document(value, merge=False):
+        cloud.document_data = {**(cloud.document_data or {}), **deepcopy(value)} if merge else deepcopy(value)
+
+    cloud.get.side_effect = get
+    cloud.set.side_effect = set_document
+    return cloud
 
 
 class NotepadStoreTests(unittest.TestCase):
-    def setUp(self):
-        self.directory = tempfile.TemporaryDirectory()
-        self.addCleanup(self.directory.cleanup)
-        self.path = Path(self.directory.name) / "notes.json"
+    def test_missing_configuration_rejects_reads_and_writes(self):
+        store = NotepadStore()
+        with self.assertRaisesRegex(NotepadStorageError, 'not configured'):
+            store.load()
+        with self.assertRaisesRegex(NotepadStorageError, 'not configured'):
+            store.save({})
 
-    def test_legacy_file_is_not_written_until_user_saves(self):
-        legacy = '[{"id": 1, "title": "Old note"}]'
-        self.path.write_text(legacy)
-        store = NotepadStore(self.path, initial_season=2026)
-        state = store.load()
-        self.assertEqual(self.path.read_text(), legacy)
-        store.save(state)
-        self.assertEqual(store.load()["items"][0]["season"], 2026)
+    def test_missing_document_initializes_without_writing(self):
+        cloud = fake_firestore()
+        state = NotepadStore(cloud, initial_season=2027).load()
+        self.assertEqual(state['current_season'], 2027)
+        self.assertEqual(state['items'], [])
+        cloud.set.assert_not_called()
 
-    def test_rollover_survives_a_new_store_and_never_revives_deleted_notes(self):
-        state = normalize_notebook({"current_season": 1, "items": [
-            {"id": "old", "season": 1}, {"id": "next", "season": 2}]})
-        NotepadStore(self.path).save(advance_season(state))
-        loaded = NotepadStore(self.path).load()
-        self.assertEqual(loaded["current_season"], 2)
-        self.assertEqual([n["id"] for n in loaded["items"]], ["next"])
+    def test_complete_note_lifecycle_survives_reload(self):
+        cloud = fake_firestore()
+        store = NotepadStore(cloud)
+        saved = store.save(save_note(store.load(), title='Test', season=2026))
+        note_id = saved['items'][0]['id']
+        self.assertEqual(NotepadStore(cloud).load(), saved)
+        store.save(save_note(saved, title='Edited', note_id=note_id, season=2026))
+        self.assertEqual(store.load()['items'][0]['title'], 'Edited')
+        store.save(set_note_done(store.load(), note_id, True))
+        self.assertTrue(store.load()['items'][0]['done'])
+        store.save(set_note_done(store.load(), note_id, False))
+        self.assertFalse(store.load()['items'][0]['done'])
+        store.save(delete_note(store.load(), note_id))
+        self.assertEqual(NotepadStore(cloud).load()['items'], [])
 
-    def test_failed_atomic_write_preserves_original_file(self):
-        store = NotepadStore(self.path)
-        saved = store.save(normalize_notebook([]))
-        before = self.path.read_bytes()
-        with patch("pathlib.Path.replace", side_effect=OSError("disk full")):
-            with self.assertRaises(NotepadStorageError):
-                store.save(advance_season(saved))
-        self.assertEqual(self.path.read_bytes(), before)
-        self.assertEqual(list(self.path.parent.glob("*.tmp")), [])
+    def test_rollover_writes_season_and_notes_together(self):
+        cloud = fake_firestore({'current_season': 2026, 'items': [
+            {'id': 'old', 'season': 2026}, {'id': 'next', 'season': 2027}]})
+        store = NotepadStore(cloud)
+        saved = store.save(advance_season(store.load()))
+        cloud.set.assert_called_once_with(saved, merge=True)
+        self.assertEqual(NotepadStore(cloud).load()['current_season'], 2027)
+        self.assertEqual([n['id'] for n in store.load()['items']], ['next'])
 
-    def test_cloud_fallback_is_not_replaced_by_stale_cloud_on_recovery(self):
-        cloud = Mock()
-        cloud.get.return_value.exists = True
-        cloud.get.return_value.to_dict.return_value = {"items": [], "current_season": 1, "updated_at": "2026-01-01T00:00:00+00:00"}
-        cloud.set.side_effect = OSError("offline")
-        store = NotepadStore(self.path, cloud)
-        store.save(advance_season(store.load()))
-        self.assertEqual(store.backend, "Local JSON")
-        loaded = NotepadStore(self.path, cloud).load()
-        self.assertEqual(loaded["current_season"], 2)
-        cloud.set.side_effect = None
-        store.save(loaded)
-        self.assertEqual(cloud.set.call_args.args[0]["current_season"], 2)
-
-    def test_cloud_receives_season_and_notes_in_one_write(self):
-        cloud = Mock()
-        store = NotepadStore(self.path, cloud)
-        state = normalize_notebook({"current_season": 3, "items": [{"id": "X", "season": 4}]})
-        store.save(state)
-        self.assertEqual(cloud.set.call_count, 1)
-        document = cloud.set.call_args.args[0]
-        self.assertEqual(document["current_season"], 3)
-        self.assertEqual(document["items"][0]["season"], 4)
-
-    def test_invalid_local_data_reports_error_without_overwriting(self):
-        self.path.write_text("broken json")
+    def test_failed_read_does_not_create_empty_notebook(self):
+        cloud = fake_firestore()
+        cloud.get.side_effect = PermissionError('denied')
         with self.assertRaises(NotepadStorageError):
-            NotepadStore(self.path).load()
-        self.assertEqual(self.path.read_text(), "broken json")
+            NotepadStore(cloud).load()
+        cloud.set.assert_not_called()
 
-    def test_newer_cloud_copy_wins_over_local_cache(self):
-        self.path.write_text(json.dumps({"items": [], "current_season": 1, "updated_at": "2026-01-01T00:00:00Z"}))
-        cloud = Mock()
-        cloud.get.return_value.exists = True
-        cloud.get.return_value.to_dict.return_value = {"items": [], "current_season": 2, "updated_at": "2026-02-01T00:00:00Z"}
-        self.assertEqual(NotepadStore(self.path, cloud).load()["current_season"], 2)
+    def test_failed_write_preserves_input_and_reports_failure(self):
+        cloud = fake_firestore({'current_season': 2026, 'items': []})
+        store = NotepadStore(cloud)
+        state = store.load()
+        before = deepcopy(state)
+        cloud.set.side_effect = OSError('offline')
+        with self.assertRaises(NotepadStorageError):
+            store.save(state)
+        self.assertEqual(state, before)
+        self.assertEqual(store.load(), before)
+
+    def test_invalid_cloud_data_reports_error_without_overwriting(self):
+        cloud = fake_firestore({'items': 'invalid'})
+        with self.assertRaises(NotepadStorageError):
+            NotepadStore(cloud).load()
+        cloud.set.assert_not_called()
+
+    def test_no_filesystem_access_on_load_or_save(self):
+        cloud = fake_firestore()
+        with patch('builtins.open', side_effect=AssertionError('Local storage used')), patch('pathlib.Path.read_text', side_effect=AssertionError('Local storage used')), patch('pathlib.Path.write_text', side_effect=AssertionError('Local storage used')):
+            store = NotepadStore(cloud)
+            store.save(store.load())
+        self.assertEqual(store.backend, 'Firestore')
+
+    def test_legacy_notes_normalize_without_writing(self):
+        cloud = fake_firestore({'items': [{'id': 'legacy', 'title': 'Old note'}]})
+        self.assertEqual(NotepadStore(cloud).load()['items'][0]['season'], 2026)
+        cloud.set.assert_not_called()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     unittest.main()

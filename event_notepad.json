@@ -1,1 +1,46 @@
-[]
+{
+  "items": [
+    {
+      "title": "Sorry for the Long Trip",
+      "details": "Team: LA Clippers\nPlayer: Cam Christie\nEffect: The player drawn must be traded to the other conference before the deadline.",
+      "season": 2026,
+      "phase": "Regular Season",
+      "due": "",
+      "updated_at": "2026-10-13T11:27:54.337613+00:00",
+      "source_event_id": "regular-season--sorry-for-the-long-trip",
+      "resolve_before_rollover": false,
+      "id": "045cd54344f24388bcf4146e97900eb6",
+      "done": false,
+      "created_at": "2026-10-13T11:27:54.337613+00:00"
+    },
+    {
+      "title": "Chemistry Builds Wins",
+      "details": "Team: Boston Celtics\nEffect: Off-court activities bring the drawn team together. Increase Offensive Consistency by 3 for its five starters for the next 3 team games, then reverse this event’s changes.",
+      "season": 2026,
+      "phase": "Regular Season",
+      "due": "",
+      "updated_at": "2026-10-13T11:25:59.831662+00:00",
+      "source_event_id": "regular-season--chemistry-builds-wins",
+      "resolve_before_rollover": true,
+      "id": "dd95bcaa035e434285ceae44c6d2a6c7",
+      "done": false,
+      "created_at": "2026-10-13T11:25:59.831662+00:00"
+    },
+    {
+      "title": "Can't Recover",
+      "details": "Team: New Orleans Pelicans\nPlayer: Saddiq Bey\nEffect: Select the injured player on the drawn team with the most remaining injury days. On his return, decrease Mid-Range and Three-Point by 2 for his next 10 appearances, then reverse these changes.",
+      "season": 2026,
+      "phase": "Regular Season",
+      "due": "",
+      "updated_at": "2026-10-13T11:27:42.017372+00:00",
+      "source_event_id": "regular-season--can-t-recover",
+      "resolve_before_rollover": true,
+      "id": "9af58156d91242cba169a63544378b5f",
+      "done": true,
+      "created_at": "2026-10-12T20:47:17.750856+00:00"
+    }
+  ],
+  "updated_at": "2026-10-14T09:07:45.513409+00:00",
+  "schema_version": 2,
+  "current_season": 2026
+}

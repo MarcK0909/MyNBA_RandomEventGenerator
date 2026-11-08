@@ -21,7 +21,7 @@ Generate realistic season events, track follow-up notes, and keep everything org
 - Conditional team and player context when an event needs it
 - Explicit event durations, eligible targets, and restoration instructions
 - Flagged scenarios with review questions, original wording, and proposed alternatives
-- Persistent notepad backed by Firestore, with local JSON fallback
+- Persistent notepad stored exclusively in Firestore
 - Sidebar backend status indicator for quick troubleshooting
 
 ---
@@ -36,7 +36,7 @@ Generate realistic season events, track follow-up notes, and keep everything org
 - `event_schema.py` — event validation
 - `notepad_utils.py` — notepad helpers
 - `season_notebook.py` — note creation, editing, visibility, and season rollover
-- `notepad_store.py` — Firestore persistence and atomic local notebook storage
+- `notepad_store.py` — Firestore notebook persistence
 - `events.json` — event database by MyNBA phase
 - `docs/EVENT_REVIEW.md` — checklist of events awaiting your decision
 - `scripts/export_event_review.py` — regenerate the checklist from event flags
@@ -71,7 +71,7 @@ Then open the local URL shown in terminal (usually <http://localhost:8501>).
 
 Use the Python interpreter where you installed the requirements. If a server is already running, stop it with **Ctrl+C** and restart to pick up the theme configuration.
 
-If Firestore is unavailable, the app automatically falls back to `event_notepad.json`.
+Firestore is required. If it is unavailable, the app reports an error; it never reads or writes `event_notepad.json`.
 
 ### Check the design refresh
 
@@ -131,7 +131,7 @@ See the [season notebook preview](docs/ui-notebook.png).
 - Automatic suggestions use the same details and season selection. Events qualify when `resolve_before_rollover` is true or `note_season_offset` is greater than zero. One-time changes stay available through **Use latest event**. Typing updates only the draft in your browser session; persistence still requires **Save note**.
 - Notes marked **Remind me before season rollover** appear in the rollover confirmation while unfinished. Handle retirements and restore expired temporary changes before advancing. Move any still-active follow-up into the next season before confirming, since departing notes are deleted.
 
-The active season and notes are saved together in the same Firestore document, with an atomic local JSON fallback. The app also reads the original flat-list format. Failed saves keep the existing state, and reloading preserves the active season. Test rollover in a separate local copy if you want to try it without deleting your real season notes.
+The active season and notes are saved together in the same Firestore document, without a local copy. Failed saves keep the existing state, and reloading preserves the active season. Test rollover with a separate Firestore document if you want to try it without deleting your real season notes.
 
 ---
 
@@ -193,10 +193,20 @@ python3.11 -m unittest discover -s tests
 - Create a Firestore database in the `nba-event-generator` project.
 - Store your service account details in `.streamlit/secrets.toml` locally and in Streamlit Cloud secrets for deployment.
 - The app reads from collection `mynba` and document `event_notepad` by default.
-- If Firestore is unavailable, the app uses local JSON storage automatically.
+- If Firestore is unavailable, loading or saving reports an error. There is no local fallback.
 
 ---
 
 ## License
 
 Personal project / custom use. Add your preferred license if you plan to share publicly.
+
+### Verify Firestore
+
+Run `python -m unittest discover -s tests` for unit and UI coverage, including simulated Firestore failures. To test your configured Firebase credentials against the live database, run:
+
+```bash
+MYNBA_TEST_FIRESTORE=1 python -m unittest discover -s tests -p test_firestore_live.py
+```
+
+The live test reads the configured notebook and exercises saving, editing, completion, deletion, and season rollover in a unique temporary document in the same collection. It deletes that test document afterward and never writes to your actual notebook. Existing `event_notepad.json` files are ignored; local-only notes are not automatically imported.
